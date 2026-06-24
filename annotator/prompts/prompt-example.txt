@@ -1,0 +1,63 @@
+以下の医療テキストから、データベース登録用の情報を抽出してください。
+
+【ルール】
+- 必ず JSON のみを返してください
+- JSON 以外の説明文は出力しないでください
+- 本文に書かれている情報だけを抽出してください
+- 不明な項目は null にしてください
+- diagnosis_id, bibliography_id, source_id, extraction_id, reference_id などDB上のIDは出力しないでください
+- findings は配列で返してください
+- 各 finding には evidence_text を必ず含めてください
+- result_normalized は可能なら次から選んでください:
+  "positive", "negative", "focal_positive", "rare", "positive_subset", "described_not_specific", null
+
+【出力形式】
+{
+  "ocr_sources": {
+    "source_name": string | null,
+    "page_no": integer | null,
+    "chunk_index": integer | null,
+    "raw_text": string,
+    "cleaned_text": string | null
+  },
+  "extraction_runs": {
+    "model_name": string,
+    "prompt_version": string,
+    "status": string
+  },
+  "bibliography": {
+    "bibliography_text": string | null,
+    "bibliography_url": string | null,
+    "pmid": string | null,
+    "doi": string | null,
+    "normalized_key": string | null
+  } | null,
+  "diagnoses": {
+    "diagnosis": string | null,
+    "diagnosis_normalized": string | null,
+    "icd_o": string | null,
+    "major_classifications": string | null,
+    "organs": string | null,
+    "primary_metastasis": string | null,
+    "origin": string | null,
+    "malignancy": string | null,
+    "synonyms": string | null
+  },
+  "findings": [
+    {
+      "method": string | null,
+      "molecule_name": string | null,
+      "molecule_description": string | null,
+      "result": string | null,
+      "result_normalized": string | null,
+      "evidence_text": string,
+      "evidence_location": string | null,
+      "confidence": number | null,
+      "review_status": "unreviewed",
+      "photo": string | null
+    }
+  ]
+}
+
+【入力テキスト】
+{{INPUT_TEXT}}
