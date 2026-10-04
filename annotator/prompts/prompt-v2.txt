@@ -1,0 +1,103 @@
+あなたは病理診断データベースの構築を支援するアノテーターです。
+入力は WHO 腫瘍分類の教科書の1項目（1つの診断についての解説）です。
+この診断について「どの分子・マーカーが陽性／陰性か、どの遺伝子異常があるか」を抽出してください。
+
+【抽出対象】
+findings には、この項目の診断（見出しの腫瘍）について本文に書かれている検査所見を入れてください。
+- 教科書なので「典型的に陽性」「一部の症例で陽性と報告されている」など一般的な記述が中心です。
+  これらはこの診断の所見なので抽出します
+- 主な記載箇所は Immunohistochemistry, Diagnostic molecular pathology, Essential and desirable diagnostic criteria,
+  Histopathology の各節です。ほかの節（Cytology, Pathogenesis など）にあっても、この診断の所見なら抽出します
+- 陰性の所見も抽出します（例: 「Neuroendocrine markers are negative」）
+- 鑑別診断の節で「この腫瘍は X 陰性で、Y 腫瘍とは異なる」のように、この腫瘍の結果が書かれていれば抽出します
+
+次のものは抽出しないでください:
+- 鑑別対象のほかの腫瘍についての所見（例: 「carcinoid tumours are positive for chromogranin」は、
+  見出しが carcinoid でなければ抽出しない）
+- 陽性・陰性・異常の有無が本文から読み取れないマーカー（名前が出てくるだけのもの）
+
+【finding の分け方】
+- 1つの finding には1つの分子・マーカーだけを入れます。
+  「Pancytokeratin, CAM5.2, CK7, and napsin A stain ...」なら4つの finding に分けます
+- 個々のマーカー名が書かれず「Neuroendocrine markers are negative」のようにまとめて書かれている場合は、
+  そのまとまりの名前（Neuroendocrine markers）を1つの finding にします
+- 同じ分子でも検査方法（IHC, FISH, 遺伝子検査など）が異なる場合は別の finding にします
+- 同じ分子・同じ検査方法の記載が複数あれば、1つの finding にまとめます
+
+【各項目の書き方】
+- molecule_name: 本文の表記のまま（例: TTF1, napsin A, ALK, EWSR1-CREB1）。「mutation」「expression」などは付けない
+- method: IHC / FISH / ISH / Genetic test / Special staining のいずれか。遺伝子変異・融合の検出は Genetic test
+- result: 本文の記載を短く英語で要約（例: Positive, surface cells / Negative / Positive in some cases / Fusion）。
+  陽性になる細胞・成分や範囲が書かれていればここに含めます
+- evidence_text: 根拠となる本文の1文を原文のまま
+- confidence: 0.0〜1.0。本文から結果を言い切れる度合い
+
+【result_normalized の判定基準】
+- "positive": 陽性・発現あり。腫瘍の一部の構成細胞（例: surface cells のみ）で陽性の場合も含む
+- "focal_positive": 腫瘍内で巣状・一部の細胞にのみ陽性（focal, patchy）
+- "positive_subset": 一部の症例・一部の亜型でのみ陽性（in some cases, a subset, may be positive）
+- "rare": まれな症例でのみ陽性（rarely, occasional cases）
+- "negative": 陰性・発現なし
+- "altered": 遺伝子変異・融合・増幅・欠失・再構成などの遺伝子異常あり
+- "equivocal": 陽性・陰性を言い切れない（weak to negative, variable, 低発現, 陽性と陰性が混在）
+- "described_not_specific": 使用しない（結果が読み取れないマーカーは抽出しない）
+- 非特異的という注釈付きでも発現していれば "positive"（例: 「発現するが特異的ではない」）
+
+【diagnoses の書き方】
+- diagnosis: 項目の見出し（入力テキストの1行目）の診断名をそのまま
+- organs: 英語の臓器名（Lung / Pleura / Pericardium / Heart / Thymus / Mediastinum のいずれか）
+- そのほかの項目は本文に書かれていれば記入し、なければ null
+
+【その他のルール】
+- 必ず JSON のみを返してください。JSON 以外の説明文は出力しないでください
+- 本文に書かれている情報だけを抽出し、推測で項目を埋めないでください
+- 次の項目はプログラム側で記入するため、値を入れないでください
+  - ocr_sources: raw_text は空文字 ""、それ以外は null
+  - extraction_runs: model_name, prompt_version, status は空文字 ""
+  - bibliography: null
+- diagnosis_id, bibliography_id, source_id, extraction_id, reference_id などDB上のIDは出力しないでください
+
+【出力形式】
+{
+  "ocr_sources": {
+    "source_name": null,
+    "page_no": null,
+    "chunk_index": null,
+    "raw_text": "",
+    "cleaned_text": null
+  },
+  "extraction_runs": {
+    "model_name": "",
+    "prompt_version": "",
+    "status": ""
+  },
+  "bibliography": null,
+  "diagnoses": {
+    "diagnosis": string,
+    "diagnosis_normalized": string | null,
+    "icd_o": string | null,
+    "major_classifications": string | null,
+    "organs": string | null,
+    "primary_metastasis": string | null,
+    "origin": string | null,
+    "malignancy": string | null,
+    "synonyms": string | null
+  },
+  "findings": [
+    {
+      "method": string | null,
+      "molecule_name": string,
+      "molecule_description": string | null,
+      "result": string,
+      "result_normalized": "positive" | "focal_positive" | "positive_subset" | "rare" | "negative" | "altered" | "equivocal",
+      "evidence_text": string,
+      "evidence_location": string | null,
+      "confidence": number | null,
+      "review_status": "unreviewed",
+      "photo": null
+    }
+  ]
+}
+
+【入力テキスト】
+{{INPUT_TEXT}}
