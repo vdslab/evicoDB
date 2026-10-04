@@ -224,7 +224,7 @@ def main():
     parser.add_argument(
         "--prompt",
         type=str,
-        default=str(script_dir / "prompts" / "prompt-v3.txt"),
+        default=str(script_dir / "prompts" / "prompt-v4.txt"),
         help="Path to the prompt template text file",
     )
     parser.add_argument(
@@ -246,7 +246,7 @@ def main():
     gcp_project = os.environ.get("GCP_PROJECT")
     gcp_location = os.environ.get("GCP_LOCATION")
     model_name = os.environ.get(
-        "ANNOTATOR_GEMINI_MODEL", os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+        "ANNOTATOR_GEMINI_MODEL", os.environ.get("GEMINI_MODEL", "gemini-3.8-flash")
     )
 
     if not gcp_project or not gcp_location:

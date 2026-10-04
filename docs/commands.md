@@ -49,7 +49,16 @@ pip install -r annotator/requirements.txt
 
 ## Annotator: 抽出 (extract.py)
 
-`annotator/.env` に `GCP_PROJECT` / `GCP_LOCATION` を設定しておく（`GEMINI_MODEL` は任意、既定は gemini-1.5-flash）。
+`annotator/.env` に `GCP_PROJECT` / `GCP_LOCATION` / `GEMINI_MODEL` を設定しておく。
+今は `GEMINI_MODEL=gemini-3.8-flash` を使っている（未設定のときも gemini-3.8-flash になる）。
+
+Vertex AI を使える Google アカウントの認証情報を指定してから実行する。
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud-adc/university.json"
+```
+
+プロンプトの既定は最新の `prompt-v4.txt`（確信度つき）。前の版を使うときは `--prompt` で指定する。
 
 ```bash
 # annotator/input/lung/*.txt（正解データがある肺の章）を抽出 → annotator/output/<日時>_<プロンプト名>/*.json
@@ -60,9 +69,12 @@ python annotator/extract.py
 # 1ファイルだけ抽出（失敗したファイルのやり直しなど）
 python annotator/extract.py --input-dir "annotator/input/lung/089_Squamous cell carcinoma.txt"
 
+# 前の版のプロンプト（v3）で抽出
+python annotator/extract.py --prompt annotator/prompts/prompt-v3.txt
+
 # 入出力ディレクトリ・プロンプトを指定
 python annotator/extract.py \
-  --prompt annotator/prompts/prompt-v3.txt \
+  --prompt annotator/prompts/prompt-v4.txt \
   --input-dir annotator/input/lung \
   --output-dir annotator/output
 ```
@@ -76,11 +88,23 @@ python annotator/clean_labels.py
 # 最新の実行フォルダの全 JSON を label/example-label-clean.csv と突き合わせて精度算出
 python annotator/evaluate.py
 
-# 過去の実行フォルダを指定して評価（v1 と v2 の比較など）
-python annotator/evaluate.py --output-dir annotator/output/20261004-195300_prompt-v2
+# 過去の実行フォルダを指定して評価（prompt-v3 以降の出力のみ対応）
+python annotator/evaluate.py --output-dir annotator/output/20261005-033733_prompt-v4
 
 # 1ファイルだけ評価したい場合
-python annotator/evaluate.py --single-json "annotator/output/20261004-195300_prompt-v2/089_Squamous cell carcinoma.json"
+python annotator/evaluate.py --single-json "annotator/output/20261005-033733_prompt-v4/089_Squamous cell carcinoma.json"
+```
+
+評価結果は実行フォルダに `evaluation_report.md` と `evaluation_details.csv` として保存される。
+
+## Annotator: 人が確認する一覧 (review.py)
+
+```bash
+# 最新の実行フォルダから review.csv を作る（間違えやすそうな順に並ぶ）
+python annotator/review.py
+
+# 実行フォルダを指定する場合
+python annotator/review.py --output-dir annotator/output/20261005-033733_prompt-v4
 ```
 
 ## Git
