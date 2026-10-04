@@ -3,6 +3,8 @@ import argparse
 import json
 import os
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Literal
 from dotenv import load_dotenv
@@ -11,6 +13,9 @@ from pydantic import BaseModel, Field
 # Load environment variables from annotator/.env if present
 script_dir = Path(__file__).resolve().parent
 load_dotenv(script_dir / ".env")
+
+MAX_ATTEMPTS = 3
+RETRY_WAIT_SECONDS = 10
 
 try:
     import vertexai
@@ -23,47 +28,11 @@ except ImportError:
     sys.exit(1)
 
 
-# Define Pydantic models for structured output matching PROMPT-EXAMPLE.md schema
-class OcrSources(BaseModel):
-    source_name: Optional[str] = Field(
-        None, description="Name of the source document/file"
-    )
-    page_no: Optional[int] = Field(None, description="Page number")
-    chunk_index: Optional[int] = Field(None, description="Index of the chunk")
-    raw_text: str = Field(..., description="The raw, unedited text of the chunk")
-    cleaned_text: Optional[str] = Field(
-        None, description="Cleaned or normalized text if applicable"
-    )
-
-
-class ExtractionRuns(BaseModel):
-    model_name: str = Field(..., description="Name of the AI model used for extraction")
-    prompt_version: str = Field(
-        ..., description="Version identifier of the prompt used"
-    )
-    status: str = Field(
-        ..., description="Execution status, e.g., 'success' or 'failed'"
-    )
-
-
-class Bibliography(BaseModel):
-    bibliography_text: Optional[str] = Field(
-        None, description="Literature reference text (Journal, Volume, Page, Year)"
-    )
-    bibliography_url: Optional[str] = Field(
-        None, description="URL of the reference, e.g., PubMed link"
-    )
-    pmid: Optional[str] = Field(None, description="PubMed ID")
-    doi: Optional[str] = Field(None, description="Digital Object Identifier")
-    normalized_key: Optional[str] = Field(None, description="Normalized citation key")
-
-
+# Response schema for Gemini: only what the model reads from the text.
+# Run metadata (model, prompt version, source file, token usage) is added by this script.
 class Diagnoses(BaseModel):
-    diagnosis: Optional[str] = Field(
-        None, description="Diagnosis name in English or Japanese"
-    )
-    diagnosis_normalized: Optional[str] = Field(
-        None, description="Standardized/normalized diagnosis name"
+    diagnosis: str = Field(
+        ..., description="Diagnosis name as in the ICD-O coding line (or the heading)"
     )
     icd_o: Optional[str] = Field(
         None, description="ICD-O morphology/behavior code (e.g., 8253/3)"
@@ -72,30 +41,27 @@ class Diagnoses(BaseModel):
         None, description="Major classification, e.g., Adenocarcinoma"
     )
     organs: Optional[str] = Field(None, description="Target organ, e.g., Lung")
-    primary_metastasis: Optional[str] = Field(
+    # Allowed values follow the ground truth (label/example-label.csv)
+    primary_metastasis: Optional[Literal["Primary", "Metastasis"]] = Field(
         None, description="Whether primary or metastasis"
     )
-    origin: Optional[str] = Field(
-        None, description="Histological origin, e.g., Epithelial"
+    origin: Optional[
+        Literal["Epithelial", "Non-epithelial", "Mixed", "Tumor-like"]
+    ] = Field(None, description="Histological origin")
+    malignancy: Optional[Literal["Benign", "Malignant", "Various"]] = Field(
+        None, description="Benign (ICD-O /0), Malignant (ICD-O /3); otherwise judged from the text"
     )
-    malignancy: Optional[str] = Field(
-        None, description="Malignancy grade, e.g., malignant, benign"
-    )
-    synonyms: Optional[str] = Field(None, description="Synonyms or related terms")
 
 
 class Finding(BaseModel):
     method: Optional[str] = Field(
         None, description="Testing method, e.g., IHC, Genetic test"
     )
-    molecule_name: Optional[str] = Field(
-        None, description="Molecule or marker name, e.g., TTF-1, CK7, KRAS mutation"
+    molecule_name: str = Field(
+        ..., description="Molecule or marker name, e.g., TTF-1, CK7, KRAS"
     )
-    molecule_description: Optional[str] = Field(
-        None, description="Description or role of the molecule"
-    )
-    result: Optional[str] = Field(
-        None,
+    result: str = Field(
+        ...,
         description="Raw result description, e.g., Positive, Negative, focal positive",
     )
     result_normalized: Optional[
@@ -105,29 +71,22 @@ class Finding(BaseModel):
             "focal_positive",
             "rare",
             "positive_subset",
-            "described_not_specific",
+            "altered",
+            "equivocal",
         ]
     ] = Field(None, description="Normalized result status")
     evidence_text: str = Field(
         ..., description="Extract of exact text serving as evidence for this finding"
     )
-    evidence_location: Optional[str] = Field(
-        None, description="Section or location in text where evidence was found"
+    applies_to: List[str] = Field(
+        ...,
+        description="Diagnosis names this finding applies to; empty means all diagnoses in the text",
     )
-    confidence: Optional[float] = Field(
-        None, description="Confidence score between 0.0 and 1.0"
-    )
-    review_status: str = Field(
-        "unreviewed", description="Status of human review, default 'unreviewed'"
-    )
-    photo: Optional[str] = Field(None, description="Associated image filename")
 
 
 class ExtractionResult(BaseModel):
-    ocr_sources: OcrSources
-    extraction_runs: ExtractionRuns
-    bibliography: Optional[Bibliography] = None
-    diagnoses: Diagnoses
+    # One input text can cover several diagnoses (one per ICD-O coding line) or none (introductions)
+    diagnoses: List[Diagnoses]
     findings: List[Finding]
 
 
@@ -213,17 +172,30 @@ def run_extraction(
         # Parse output to ensure it matches the schema and is valid JSON
         result_json = json.loads(raw_output)
 
-        # Inject current run metadata
-        if "extraction_runs" in result_json:
-            result_json["extraction_runs"]["model_name"] = model_name
-            result_json["extraction_runs"]["prompt_version"] = prompt_version
-            result_json["extraction_runs"]["status"] = "success"
+        # Token usage reported by the API
+        meta = response.usage_metadata
+        usage = {
+            "prompt_tokens": getattr(meta, "prompt_token_count", 0) or 0,
+            "output_tokens": getattr(meta, "candidates_token_count", 0) or 0,
+            "thinking_tokens": getattr(meta, "thoughts_token_count", 0) or 0,
+            "total_tokens": getattr(meta, "total_token_count", 0) or 0,
+        }
+        print(
+            f"Token usage: prompt={usage['prompt_tokens']} output={usage['output_tokens']} "
+            f"thinking={usage['thinking_tokens']} total={usage['total_tokens']}"
+        )
 
-        if "ocr_sources" in result_json:
-            result_json["ocr_sources"]["source_name"] = input_path.name
-            result_json["ocr_sources"]["raw_text"] = input_text[:500] + (
-                "..." if len(input_text) > 500 else ""
-            )
+        # Add run metadata (evaluate.py finds the input text via ocr_sources.source_name)
+        result_json = {
+            "ocr_sources": {"source_name": input_path.name},
+            "extraction_runs": {
+                "model_name": model_name,
+                "prompt_version": prompt_version,
+                "status": "success",
+                "token_usage": usage,
+            },
+            **result_json,
+        }
 
         # Write clean formatted JSON
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -231,13 +203,14 @@ def run_extraction(
             json.dump(result_json, f, indent=2, ensure_ascii=False)
 
         print(f"Successfully processed: {input_path.name} -> {output_path}")
+        return usage
 
     except Exception as e:
         import traceback
 
         traceback.print_exc()
         print(f"Error extracting from {input_path.name}: {e}", file=sys.stderr)
-        sys.exit(1)
+        return None
 
 
 def main():
@@ -247,20 +220,21 @@ def main():
     parser.add_argument(
         "--prompt",
         type=str,
-        default=str(script_dir / "prompts" / "prompt-example.txt"),
+        default=str(script_dir / "prompts" / "prompt-v3.txt"),
         help="Path to the prompt template text file",
     )
     parser.add_argument(
         "--input-dir",
         type=str,
-        default=str(script_dir / "input"),
-        help="Path to directory containing input .txt files",
+        default=str(script_dir / "input" / "lung"),
+        help="Path to a directory of input .txt files, or a single .txt file "
+        "(default: input/lung, the chapter covered by the ground truth)",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
         default=str(script_dir / "output"),
-        help="Path to directory where extracted JSONs will be saved",
+        help="Base directory; each run saves JSONs into a new <timestamp>_<prompt_version> subfolder",
     )
     args = parser.parse_args()
 
@@ -290,28 +264,65 @@ def main():
         )
         sys.exit(1)
 
-    input_dir = Path(args.input_dir)
-    if not input_dir.exists() or not input_dir.is_dir():
-        print(
-            f"Error: Input directory '{input_dir}' does not exist or is not a directory.",
-            file=sys.stderr,
-        )
+    input_path = Path(args.input_dir)
+    if not input_path.exists():
+        print(f"Error: Input path '{input_path}' does not exist.", file=sys.stderr)
         sys.exit(1)
 
-    output_dir = Path(args.output_dir)
-
-    # Get all .txt files
-    txt_files = sorted(list(input_dir.glob("*.txt")))
+    # Accept either a single .txt file or a directory of .txt files
+    if input_path.is_file():
+        txt_files = [input_path]
+    else:
+        txt_files = sorted(list(input_path.glob("*.txt")))
     if not txt_files:
-        print(f"No .txt files found in input directory: {input_dir}")
+        print(f"No .txt files found in input path: {input_path}")
         return
 
     print(f"Found {len(txt_files)} text files to process.")
     prompt_version = prompt_path.stem
 
+    # Separate each run into its own folder, e.g. output/20261004-195300_prompt-v2/
+    run_id = f"{datetime.now():%Y%m%d-%H%M%S}_{prompt_version}"
+    output_dir = Path(args.output_dir) / run_id
+    print(f"Output folder: {output_dir}")
+
+    totals = {
+        "prompt_tokens": 0,
+        "output_tokens": 0,
+        "thinking_tokens": 0,
+        "total_tokens": 0,
+    }
+    failed = []
     for txt_file in txt_files:
         out_json_file = output_dir / f"{txt_file.stem}.json"
-        run_extraction(prompt_path, txt_file, out_json_file, model_name, prompt_version)
+        # Retry transient API errors (rate limits, timeouts) before giving up on a file
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            usage = run_extraction(
+                prompt_path, txt_file, out_json_file, model_name, prompt_version
+            )
+            if usage is not None:
+                break
+            if attempt < MAX_ATTEMPTS:
+                wait = RETRY_WAIT_SECONDS * attempt
+                print(f"Retrying {txt_file.name} in {wait}s (attempt {attempt + 1}/{MAX_ATTEMPTS})...")
+                time.sleep(wait)
+        if usage is None:
+            failed.append(txt_file)
+            continue
+        for k in totals:
+            totals[k] += usage[k]
+
+    succeeded = len(txt_files) - len(failed)
+    print(
+        f"\nTotal token usage ({succeeded} files): prompt={totals['prompt_tokens']} "
+        f"output={totals['output_tokens']} thinking={totals['thinking_tokens']} total={totals['total_tokens']}"
+    )
+
+    if failed:
+        print(f"\nFailed {len(failed)}/{len(txt_files)} files:", file=sys.stderr)
+        for f in failed:
+            print(f"  {f}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
