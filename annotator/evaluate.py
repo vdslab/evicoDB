@@ -26,52 +26,6 @@ class Tee:
             s.flush()
 
 
-def normalize_diagnosis(name: str) -> str:
-    """Normalize diagnosis names to handle minor typo differences, casing, and common suffixes."""
-    if not name:
-        return ""
-    name = name.strip().lower()
-    # Handle the lowercase 'l' typo in "lnvasive" vs "invasive"
-    if name.startswith("lnvasive"):
-        name = "invasive" + name[8:]
-    # Remove common suffixes like "of the lung", "of the colon", etc.
-    for suffix in [
-        " of the lung",
-        " of the colon",
-        " of the stomach",
-        " of the urinary tract",
-        " of lung",
-    ]:
-        if name.endswith(suffix):
-            name = name[: -len(suffix)]
-    return name.strip()
-
-
-def normalize_organ(name: str) -> str:
-    """Normalize an organ name for matching (lowercase, singularize 'lungs')."""
-    if not name:
-        return ""
-    name = name.strip().lower()
-    # Common pulmonary synonyms used in the extractions -> CSV's "Lung"
-    if name in ("lungs", "respiratory system", "bronchus", "pulmonary artery"):
-        return "lung"
-    return name
-
-
-def organ_matches(csv_organ: str, target_organ: str) -> bool:
-    """True if a CSV row's organ belongs to the target diagnosis's organ(s).
-
-    The extraction's organ field may list several organs (e.g.
-    'pleura, pericardium'); a row matches if the CSV organ appears among them.
-    """
-    cn = normalize_organ(csv_organ)
-    if not cn:
-        return False
-    # target may be a comma-separated list of organs
-    targets = [normalize_organ(t) for t in str(target_organ).split(",")]
-    return any(t and (cn == t or cn in t or t in cn) for t in targets)
-
-
 def normalize_molecule(name: str) -> str:
     """Normalize molecule names by stripping common suffixes and lowercasing."""
     if not name:
@@ -248,99 +202,6 @@ def load_extracted_json(json_path: Path):
     return data
 
 
-def load_ground_truth_csv(
-    csv_path: Path, target_diagnosis: str, target_organ: str = ""
-):
-    """Load the ground truth CSV and filter rows matching the target diagnosis.
-
-    Returns a tuple (df, matched). ``matched`` is False when a diagnosis was
-    requested but no ground-truth rows could be found for it. In that case the
-    caller should treat the JSON as having no ground truth (skip), rather than
-    comparing it against every row of the master CSV.
-
-    When ``target_organ`` is given, matching is first scoped to that organ so a
-    diagnosis name is never matched against an identically-named diagnosis in a
-    different organ (e.g. "Squamous cell carcinoma" of lung vs urinary tract).
-    """
-    # Read the CSV file.
-    # Use keep_default_na=False to avoid interpreting "NA" (as in Napsin A or similar) as NaN
-    df = pd.read_csv(csv_path, keep_default_na=False)
-
-    # Check if necessary columns exist
-    required_cols = ["Molecules", "Results"]
-    for col in required_cols:
-        if col not in df.columns:
-            print(
-                f"Error: Label CSV '{csv_path.name}' is missing required column '{col}'.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    # Scope to the target organ first, so same-named diagnoses in other organs
-    # cannot contaminate the match.
-    if "Organs" in df.columns and target_organ:
-        organ_df = df[df["Organs"].apply(lambda x: organ_matches(str(x), target_organ))]
-        if len(organ_df) > 0:
-            df = organ_df
-        else:
-            # Organ not covered by this CSV (e.g. heart, pleura): no ground truth.
-            print(
-                f"No rows in CSV for organ '{target_organ}'. "
-                f"Skipping (organ not in ground truth).",
-                file=sys.stderr,
-            )
-            return df.iloc[0:0], False
-
-    # Filter by diagnosis if possible
-    diag_col = None
-    if "Diagnosis" in df.columns:
-        diag_col = "Diagnosis"
-    elif "Diagnosis (EN)" in df.columns:
-        diag_col = "Diagnosis (EN)"
-
-    matched = True
-    if diag_col and target_diagnosis:
-        norm_target = normalize_diagnosis(target_diagnosis)
-        # Exact match on normalized names
-        filtered_df = df[
-            df[diag_col].apply(lambda x: normalize_diagnosis(str(x)) == norm_target)
-        ]
-
-        # If no rows match, attempt fuzzy matching (substring match)
-        if len(filtered_df) == 0:
-            filtered_df = df[
-                df[diag_col].apply(
-                    lambda x: (
-                        len(str(x)) >= 10
-                        and (
-                            norm_target in normalize_diagnosis(str(x))
-                            or normalize_diagnosis(str(x)) in norm_target
-                        )
-                    )
-                )
-            ]
-
-        if len(filtered_df) > 0:
-            print(
-                f"Filtered CSV to {len(filtered_df)} ground truth rows matching diagnosis '{target_diagnosis}' (using column '{diag_col}')"
-            )
-            df = filtered_df
-        else:
-            # No ground truth for this diagnosis (e.g. introduction pages, or
-            # organs not covered by this CSV). Signal a skip instead of
-            # silently comparing against the entire CSV.
-            print(
-                f"No rows in CSV matched diagnosis '{target_diagnosis}'. "
-                f"Skipping (no ground truth available).",
-                file=sys.stderr,
-            )
-            matched = False
-
-    # Clean and filter out rows with empty Molecule names
-    df = df[df["Molecules"].astype(str).str.strip() != ""]
-    return df, matched
-
-
 def load_ground_truth_rows(csv_path: Path, diagnoses: list):
     """Ground-truth rows of the given Lung diagnoses (names as in diagnosis-mapping.csv)."""
     df = pd.read_csv(csv_path, keep_default_na=False)
@@ -458,61 +319,39 @@ def prf(tp: int, fp: int, fn: int):
 def evaluation_units(extracted_data: dict, json_path: Path, csv_path: Path):
     """Split one extraction into scoring units: (label, ground-truth rows, extracted findings).
 
-    - Outputs with `applies_to` (prompt v3) for a file in diagnosis-mapping.csv are scored per
-      diagnosis of the ICD-O coding section. A diagnosis gets the findings that list it in
-      `applies_to` plus the findings common to all diagnoses (empty `applies_to`).
-    - Older outputs are scored per file against all ground truth related to the file.
-    Returns None when the file has no ground truth.
+    A file in diagnosis-mapping.csv is scored per diagnosis of its ICD-O coding section.
+    A diagnosis gets the findings that list it in `applies_to` plus the findings common to
+    all diagnoses (empty `applies_to`). Returns None when the file has no ground truth.
     """
     findings = extracted_data.get("findings", [])
     diagnoses = extracted_data.get("diagnoses") or []
-    if isinstance(diagnoses, dict):  # single object before prompt v3
-        diagnoses = [diagnoses]
-    names = [d.get("diagnosis") or d.get("diagnosis_normalized") or "" for d in diagnoses]
+    names = [d.get("diagnosis") or "" for d in diagnoses]
 
-    source_name = source_file_name(extracted_data, json_path)
-    mapped = DIAGNOSIS_MAPPING.get(source_name)
-    per_diagnosis = mapped is not None and any("applies_to" in f for f in findings)
-
-    if mapped is not None:
-        if not any(e["labels"] for e in mapped):
-            return None
-        if not per_diagnosis:
-            labels = sorted({l for e in mapped for l in e["labels"]})
-            gt_df = load_ground_truth_rows(csv_path, labels)
-            return [(" ; ".join(names) or source_name, gt_df, findings)]
-
-        units = []
-        model_keys = {normalize_name(n): n for n in names}
-        for e in mapped:
-            if not e["labels"]:
-                continue  # diagnosis only in the textbook: not scored
-            # Match the model's diagnosis by name, then by ICD-O code if that is unambiguous
-            model_name = model_keys.get(normalize_name(e["who_diagnosis"]))
-            if model_name is None:
-                same_code = [n for d, n in zip(diagnoses, names) if d.get("icd_o") == e["icd_o"]]
-                model_name = same_code[0] if len(same_code) == 1 else None
-            if model_name is None:
-                print(f"Note: '{e['who_diagnosis']}' was not output by the model; scoring common findings only")
-            key = normalize_name(model_name) if model_name else None
-            unit_findings = [
-                f
-                for f in findings
-                if not f.get("applies_to")
-                or (key and key in {normalize_name(a) for a in f["applies_to"]})
-            ]
-            units.append((e["who_diagnosis"], load_ground_truth_rows(csv_path, e["labels"]), unit_findings))
-        return units
-
-    # Not in the mapping: look up the ground truth by the model's diagnosis names
-    matched_dfs = []
-    for d, name in zip(diagnoses, names):
-        gt_part, matched = load_ground_truth_csv(csv_path, name, str(d.get("organs") or "").strip())
-        if matched:
-            matched_dfs.append(gt_part)
-    if not matched_dfs:
+    mapped = DIAGNOSIS_MAPPING.get(source_file_name(extracted_data, json_path))
+    if mapped is None or not any(e["labels"] for e in mapped):
         return None
-    return [(" ; ".join(names), pd.concat(matched_dfs).drop_duplicates(), findings)]
+
+    units = []
+    model_keys = {normalize_name(n): n for n in names}
+    for e in mapped:
+        if not e["labels"]:
+            continue  # diagnosis only in the textbook: not scored
+        # Match the model's diagnosis by name, then by ICD-O code if that is unambiguous
+        model_name = model_keys.get(normalize_name(e["who_diagnosis"]))
+        if model_name is None:
+            same_code = [n for d, n in zip(diagnoses, names) if d.get("icd_o") == e["icd_o"]]
+            model_name = same_code[0] if len(same_code) == 1 else None
+        if model_name is None:
+            print(f"Note: '{e['who_diagnosis']}' was not output by the model; scoring common findings only")
+        key = normalize_name(model_name) if model_name else None
+        unit_findings = [
+            f
+            for f in findings
+            if not f.get("applies_to")
+            or (key and key in {normalize_name(a) for a in f["applies_to"]})
+        ]
+        units.append((e["who_diagnosis"], load_ground_truth_rows(csv_path, e["labels"]), unit_findings))
+    return units
 
 
 def evaluate_extraction(json_path: Path, csv_path: Path):
@@ -578,28 +417,14 @@ def evaluate_extraction(json_path: Path, csv_path: Path):
     return results
 
 
-def evaluate_run(json_files, master_csv, label_dir):
+def evaluate_run(json_files, label_csv: Path):
     """Evaluate every JSON of one run and print the summary. Returns per-molecule comparison rows."""
     summary_results = []
     evaluated = 0
     skipped = 0
 
     for json_file in json_files:
-        if master_csv:
-            csv_file = master_csv
-        else:
-            # Search for corresponding per-file label CSV
-            csv_file = label_dir / f"{json_file.stem}-label.csv"
-            if not csv_file.exists():
-                # Try plain stem.csv
-                csv_file = label_dir / f"{json_file.stem}.csv"
-
-        if not csv_file.exists():
-            skipped += 1
-            print(f"Skipping evaluation for '{json_file.name}': No matching CSV file found in '{label_dir}'")
-            continue
-
-        results = evaluate_extraction(json_file, csv_file)
+        results = evaluate_extraction(json_file, label_csv)
         if results is None:
             skipped += 1
             continue
@@ -669,19 +494,10 @@ def main():
         help="Directory containing extracted JSON files (default: latest run folder in annotator/output)",
     )
     parser.add_argument(
-        "--label-dir",
-        type=str,
-        default="annotator/label",
-        help="Directory containing CSV ground truth files",
-    )
-    parser.add_argument(
         "--label-csv",
         type=str,
         default="annotator/label/example-label-clean.csv",
-        help="Single master CSV containing ground truth for all diagnoses. "
-        "When it exists, every JSON in --output-dir is evaluated against it "
-        "(filtered by each JSON's diagnosis). Per-file CSVs in --label-dir are "
-        "used as a fallback only when this file is missing.",
+        help="Ground truth CSV for all diagnoses (rows are picked via label/diagnosis-mapping.csv)",
     )
     parser.add_argument(
         "--single-json",
@@ -689,39 +505,21 @@ def main():
         default=None,
         help="Evaluate a single specific JSON file",
     )
-    parser.add_argument(
-        "--single-label",
-        type=str,
-        default=None,
-        help="Use a single specific CSV label file",
-    )
 
     args = parser.parse_args()
 
-    # Case of evaluating a single file pair
+    label_csv = Path(args.label_csv)
+    if not label_csv.exists():
+        print(f"Error: Label file '{label_csv}' does not exist.", file=sys.stderr)
+        sys.exit(1)
+
+    # Case of evaluating a single file
     if args.single_json:
         json_path = Path(args.single_json)
         if not json_path.exists():
             print(f"Error: File '{json_path}' does not exist.", file=sys.stderr)
             sys.exit(1)
-
-        if args.single_label:
-            csv_path = Path(args.single_label)
-        else:
-            # Try a per-file label, then fall back to the master CSV.
-            csv_path = Path(args.label_dir) / f"{json_path.stem}-label.csv"
-            if (
-                not csv_path.exists()
-                and args.label_csv
-                and Path(args.label_csv).exists()
-            ):
-                csv_path = Path(args.label_csv)
-
-        if not csv_path.exists():
-            print(f"Error: Label file '{csv_path}' does not exist.", file=sys.stderr)
-            sys.exit(1)
-
-        evaluate_extraction(json_path, csv_path)
+        evaluate_extraction(json_path, label_csv)
         return
 
     # Case of batch evaluation
@@ -738,7 +536,6 @@ def main():
             sys.exit(1)
         out_dir = run_dirs[-1]
         print(f"Using latest run folder: {out_dir}")
-    label_dir = Path(args.label_dir)
 
     if not out_dir.exists():
         print(f"Error: Output directory '{out_dir}' does not exist.", file=sys.stderr)
@@ -750,25 +547,14 @@ def main():
         return
 
     print(f"Found {len(json_files)} extracted JSON files for evaluation.")
-
-    # Prefer a single master CSV (all diagnoses in one file). evaluate_extraction
-    # filters it down to each JSON's diagnosis internally.
-    master_csv = Path(args.label_csv) if args.label_csv else None
-    if master_csv and master_csv.exists():
-        print(f"Using master label CSV for all JSONs: {master_csv}")
-    else:
-        master_csv = None
-        print(
-            f"No master label CSV found at '{args.label_csv}'. "
-            f"Falling back to per-file CSVs in '{label_dir}'."
-        )
+    print(f"Using label CSV: {label_csv}")
 
     # Save the report and per-molecule details next to the extracted JSONs
     report_path = out_dir / "evaluation_report.md"
     details_path = out_dir / "evaluation_details.csv"
     with open(report_path, "w", encoding="utf-8") as report:
         with contextlib.redirect_stdout(Tee(sys.stdout, report)):
-            details = evaluate_run(json_files, master_csv, label_dir)
+            details = evaluate_run(json_files, label_csv)
     pd.DataFrame(details).to_csv(details_path, index=False, encoding="utf-8-sig")
     print(f"\nSaved report: {report_path}")
     print(f"Saved details: {details_path}")

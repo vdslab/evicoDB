@@ -133,9 +133,9 @@ input/lung の各ファイルの ICD-O coding の節に並んでいる1行（コ
 - `Mild / Moderate / Severe squamous dysplasia` → 正解データは `Dysplasia` 1つ（程度の区別なし）
 - `PEComa, benign` → `Clear cell tumour`（良性 PEComa の旧名）も含めるか
 
-evaluate.py は、prompt v3 以降の出力（所見に `applies_to` がある）をこの表の1行（診断）ごとに採点します。
+evaluate.py は、この表の1行（診断）ごとに採点します（prompt v3 以降の出力が対象）。
 ある診断の所見は、`applies_to` にその診断名がある所見と、すべての診断に共通の所見（`applies_to` が空）です。
-それより前の出力は、ファイルに関係するすべての正解データとまとめて採点します。
+この表にないファイルは採点しません。
 
 正解データの Lung 診断のうち、以下の14件は input/lung に対応する章がありません。
 
