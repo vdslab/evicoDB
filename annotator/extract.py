@@ -78,6 +78,10 @@ class Finding(BaseModel):
     evidence_text: str = Field(
         ..., description="Extract of exact text serving as evidence for this finding"
     )
+    # Asked for since prompt v4; optional so earlier prompts still validate
+    confidence: Optional[float] = Field(
+        None, description="How definitely the text states the result (0.0-1.0)"
+    )
     applies_to: List[str] = Field(
         ...,
         description="Diagnosis names this finding applies to; empty means all diagnoses in the text",
