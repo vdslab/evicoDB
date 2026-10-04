@@ -15,15 +15,16 @@ CREATE TABLE
 -- 1診断に対して複数の所見（findings）が紐づく
 CREATE TABLE
     diagnoses (
-        diagnosis_id INT NOT NULL COMMENT '診断ID（Excel由来のID、手動管理）',
-        diagnosis TEXT NULL COMMENT '診断名（例: Invasive mucinous adenocarcinoma）',
-        icd_o TEXT NULL COMMENT 'ICD-Oコード',
-        major_classifications TEXT NULL COMMENT '大分類（例: Adenocarcinoma）',
-        organs TEXT NULL COMMENT '臓器（例: Lung）',
-        primary_metastasis TEXT NULL COMMENT '原発/転移（Primary / Metastasis）',
-        origin TEXT NULL COMMENT '組織学的起源（例: Epithelial）',
-        malignancy TEXT NULL COMMENT '良悪性区分（benign / malignant など）',
-        PRIMARY KEY (diagnosis_id)
+        diagnosis_id INT NOT NULL AUTO_INCREMENT COMMENT '診断ID（自動採番）',
+        diagnosis VARCHAR(255) NOT NULL COMMENT '診断名（例: Invasive mucinous adenocarcinoma）',
+        organs VARCHAR(100) NOT NULL COMMENT '臓器（例: Lung）',
+        icd_o VARCHAR(20) NULL COMMENT 'ICD-Oコード（例: 8253/3）',
+        major_classifications VARCHAR(255) NULL COMMENT '大分類（例: Adenocarcinoma）',
+        primary_metastasis VARCHAR(50) NULL COMMENT '原発/転移（Primary / Metastasis）',
+        origin VARCHAR(50) NULL COMMENT '組織学的起源（例: Epithelial）',
+        malignancy VARCHAR(50) NULL COMMENT '良悪性区分（Benign / Malignant など）',
+        PRIMARY KEY (diagnosis_id),
+        UNIQUE KEY uq_diagnoses_organ_diagnosis (organs, diagnosis)
     ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '診断マスタ';
 
 -- 所見テーブル
@@ -34,10 +35,11 @@ CREATE TABLE
         finding_id INT NOT NULL AUTO_INCREMENT COMMENT '所見ID（自動採番）',
         diagnosis_id INT NOT NULL COMMENT '対応する診断ID（diagnoses.diagnosis_id）',
         reference_id INT NULL COMMENT '参照文献ID（bibliography.bibliography_id）',
-        method TEXT NULL COMMENT '検査方法（IHC / Genetic test など）',
-        molecule_name TEXT NULL COMMENT '分子・マーカー名（例: TTF-1, CK7, KRAS mutation）',
+        method VARCHAR(100) NULL COMMENT '検査方法（IHC / Genetic test など）',
+        molecule_name VARCHAR(255) NULL COMMENT '分子・マーカー名（例: TTF-1, CK7, KRAS mutation）',
         molecule_description TEXT NULL COMMENT '分子の説明・補足情報',
-        result TEXT NULL COMMENT '検査結果（例: Positive, Negative, Positive, focal など）',
+        result TEXT NULL COMMENT '検査結果の記述（例: Positive, Negative, Positive, focal など）',
+        result_category ENUM('Positive', 'Negative', 'Altered', 'Equivocal') NULL COMMENT '検査結果の判定（陽性 / 陰性 / 遺伝子異常あり / 判定困難）',
         photo TEXT NULL COMMENT '画像ファイル名またはパス',
         PRIMARY KEY (finding_id),
         KEY idx_findings_diagnosis_id (diagnosis_id),
