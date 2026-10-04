@@ -106,6 +106,7 @@ def review_rows(json_path: Path, label_csv: Path) -> list:
                     "検査方法": f.get("method") or "",
                     "結果": f.get("result") or "",
                     "判定": f.get("result_normalized") or "",
+                    "確信度": f.get("confidence", ""),
                     "根拠の本文": evidence,
                     "新規": "" if gt_item else "○",
                     "正解データの結果": gt_item["raw_result"] if gt_item else "",
