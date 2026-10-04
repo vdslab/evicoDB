@@ -26,6 +26,7 @@ Docker を用いることで、誰でも同一環境でデータベースを再�
 など、診断に固有の情報を保持します。
 
 1つの診断に対して、複数の所見（findings）が紐づきます。
+「臓器 + 診断名」の組み合わせは重複できません。
 
 
 ### findings
@@ -35,12 +36,14 @@ Excelの1行に相当します。
 
 - 検査方法（IHC / Genetic test など）
 - 分子・マーカー名
-- 検査結果
+- 検査結果（元の記述と、陽性 / 陰性 / 遺伝子異常あり / 判定困難 の判定）
 - 画像ファイル名
 - 参照文献
 
 診断（diagnoses）および文献（bibliography）への外部キーを持ちます。
 出典が存在しない場合は reference_id を NULL とします。
+
+DB には人が確認済みの所見だけを登録します。LLM による抽出結果の確認は DB の外（annotator/output）で行います。
 
 
 ### bibliography
@@ -59,6 +62,9 @@ Excelの1行に相当します。
 - mysql/init/schema.sql
 
 Docker コンテナ初回起動時に自動で実行されます。
+スキーマを変更した場合は、データを削除して作り直す必要があります（`docker compose down -v && docker compose up -d`）。
+
+ER 図は docs/er-diagram.md にあります。
 
 
 
