@@ -280,8 +280,11 @@ def compare_findings(gt_findings: dict, extracted_findings: dict, input_text):
     Only molecules that are both in the ground truth and in the input text are scored:
     - extracted but not in the ground truth -> "Not in GT" (not counted as FP)
     - in the ground truth but never mentioned in the input text -> "Not in text" (not counted as FN)
+
+    A mismatch where either side carries a qualifier (the judgment is not 100%) is marked
+    "Mismatch (qualified)". It still counts as FP + FN; `qualified` lets lenient metrics drop it.
     """
-    counts = {"tp": 0, "fp": 0, "fn": 0, "excluded_not_in_gt": 0, "excluded_not_in_text": 0}
+    counts = {"tp": 0, "fp": 0, "fn": 0, "qualified": 0, "excluded_not_in_gt": 0, "excluded_not_in_text": 0}
     rows = []
     for mol in sorted(set(gt_findings) | set(extracted_findings)):
         gt_item = gt_findings.get(mol)
@@ -302,6 +305,9 @@ def compare_findings(gt_findings: dict, extracted_findings: dict, input_text):
                 status = "Mismatch"
                 counts["fp"] += 1
                 counts["fn"] += 1
+                if qualifier_of(gt_item) or qualifier_of(ex_item):
+                    status = "Mismatch (qualified)"
+                    counts["qualified"] += 1
         elif ex_item:
             status = "Not in GT (excluded)"
             counts["excluded_not_in_gt"] += 1
@@ -405,6 +411,7 @@ def evaluate_extraction(json_path: Path, csv_path: Path):
         print(f"TP (True Positive):  {counts['tp']}")
         print(f"FP (False Positive): {counts['fp']}")
         print(f"FN (False Negative): {counts['fn']}")
+        print(f"Qualified mismatch:  {counts['qualified']} (included in FP and FN)")
         print(
             f"Excluded:            {counts['excluded_not_in_gt']} not in GT, "
             f"{counts['excluded_not_in_text']} not in text"
@@ -456,17 +463,19 @@ def evaluate_run(json_files, label_csv: Path):
     if summary_results:
         print("\n=== SUMMARY METRICS OVER ALL EVALUATED DIAGNOSES ===")
         print(f"(Evaluated {len(summary_results)} diagnoses in {evaluated} files, skipped {skipped} files)")
-        print("| File | Diagnosis | Precision | Recall (抽出率) | F1 Score | TP | FP | FN | Excluded |")
-        print("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+        print("| File | Diagnosis | Precision | Recall (抽出率) | F1 Score | TP | FP | FN | Qualified | Excluded |")
+        print("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
         for res in summary_results:
             print(
-                f"| {res['file']} | {res['diagnosis']} | {res['precision']:.2%} | {res['recall']:.2%} | {res['f1']:.2%} | {res['tp']} | {res['fp']} | {res['fn']} | {res['excluded']} |"
+                f"| {res['file']} | {res['diagnosis']} | {res['precision']:.2%} | {res['recall']:.2%} | {res['f1']:.2%} | {res['tp']} | {res['fp']} | {res['fn']} | {res['qualified']} | {res['excluded']} |"
             )
 
         total_tp = sum(r["tp"] for r in summary_results)
         total_fp = sum(r["fp"] for r in summary_results)
         total_fn = sum(r["fn"] for r in summary_results)
+        total_q = sum(r["qualified"] for r in summary_results)
         micro_p, micro_r, micro_f1 = prf(total_tp, total_fp, total_fn)
+        len_p, len_r, len_f1 = prf(total_tp, total_fp - total_q, total_fn - total_q)
         # Macro averages skip diagnoses with nothing scored (no TP/FP/FN), which would otherwise count as 0%
         scored = [r for r in summary_results if r["tp"] + r["fp"] + r["fn"] > 0]
         macro_p = sum(r["precision"] for r in scored) / len(scored) if scored else 0.0
@@ -482,6 +491,10 @@ def evaluate_run(json_files, label_csv: Path):
         print(f"Macro Precision:   {macro_p:.2%}   (averaged over {len(scored)} diagnoses with scored findings)")
         print(f"Macro Recall (抽出率): {macro_r:.2%}")
         print(f"Macro F1:          {macro_f1:.2%}")
+        print(f"\nQualified mismatches: {total_q} (a judgment with a qualifier such as ほぼ / 条件付き differs)")
+        print(f"Lenient Micro Precision:   {len_p:.2%}   (qualified mismatches removed from FP and FN)")
+        print(f"Lenient Micro Recall (抽出率): {len_r:.2%}")
+        print(f"Lenient Micro F1:          {len_f1:.2%}")
 
         # Per-organ breakdown (micro-averaged over each organ's findings)
         organs = {}
