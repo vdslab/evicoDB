@@ -154,16 +154,22 @@ def find_input_text(extracted_data: dict, json_path: Path):
     return None
 
 
-def load_result_mapping(csv_path: Path) -> dict:
-    """Load the raw result -> category table (label/result-mapping.csv)."""
+def load_result_mapping(csv_path: Path):
+    """Load the raw result table (label/result-mapping.csv).
+
+    Returns (raw result -> category, raw result -> qualifier). The qualifier notes that a
+    judgment is not 100% (e.g. "ほぼ", "条件付き:細胞"); it is shown in reports but not scored.
+    """
     if not csv_path.exists():
         print(f"Warning: Result mapping '{csv_path}' not found. Using fallback rules only.", file=sys.stderr)
-        return {}
+        return {}, {}
     df = pd.read_csv(csv_path, keep_default_na=False, encoding="utf-8-sig")
-    return {str(r).strip(): c for r, c in zip(df["result_raw"], df["category_proposed"])}
+    raws = [str(r).strip() for r in df["result_raw"]]
+    qualifiers = df["qualifier"] if "qualifier" in df else [""] * len(df)
+    return dict(zip(raws, df["category_proposed"])), {r: q for r, q in zip(raws, qualifiers) if q}
 
 
-RESULT_MAPPING = load_result_mapping(SCRIPT_DIR / "label" / "result-mapping.csv")
+RESULT_MAPPING, RESULT_QUALIFIERS = load_result_mapping(SCRIPT_DIR / "label" / "result-mapping.csv")
 
 
 def map_result_status(res: str) -> str:
@@ -182,6 +188,19 @@ def map_result_status(res: str) -> str:
     if res_lower.startswith("negative"):
         return "Negative"
     return "Other"
+
+
+def qualifier_of(item) -> str:
+    """Qualifier of a result (e.g. "ほぼ", "条件付き:細胞"), or "" if the judgment is unqualified."""
+    return RESULT_QUALIFIERS.get(item["raw_result"].strip(), "") if item else ""
+
+
+def mapped_label(item) -> str:
+    """Mapped result with its qualifier, e.g. "Negative・ほぼ"."""
+    if not item:
+        return "N/A"
+    q = qualifier_of(item)
+    return f"{item['mapped_result']}・{q}" if q else item["mapped_result"]
 
 
 def results_match(gt_result: str, ex_result: str) -> bool:
@@ -298,11 +317,11 @@ def compare_findings(gt_findings: dict, extracted_findings: dict, input_text):
                 "Molecule": gt_item["raw_molecule"] if gt_item else ex_item["raw_molecule"],
                 "GT Method": gt_item["method"] if gt_item else "-",
                 "GT Result": gt_item["raw_result"] if gt_item else "-",
-                "GT Mapped": gt_item["mapped_result"] if gt_item else "N/A",
+                "GT Mapped": mapped_label(gt_item),
                 "Ex Molecule": ex_item["raw_molecule"] if ex_item else "-",
                 "Ex Method": ex_item["method"] if ex_item else "-",
                 "Ex Result": ex_item["raw_result"] if ex_item else "-",
-                "Ex Mapped": ex_item["mapped_result"] if ex_item else "N/A",
+                "Ex Mapped": mapped_label(ex_item),
                 "Status": status,
             }
         )
