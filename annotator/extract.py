@@ -82,6 +82,21 @@ class Finding(BaseModel):
     confidence: Optional[float] = Field(
         None, description="How definitely the text states the result (0.0-1.0)"
     )
+    # Asked for since prompt v5: notes that the result is not 100% (vocabulary of label/result-mapping.csv)
+    qualifiers: List[
+        Literal[
+            "ほぼ",
+            "陽性部分あり",
+            "条件付き:細胞",
+            "条件付き:低発現",
+            "条件付き:%",
+            "条件付き:可能性",
+            "条件付き:症例",
+        ]
+    ] = Field(default_factory=list, description="Conditions or notes on the result")
+    qualifier_note: Optional[str] = Field(
+        None, description="What the qualifiers refer to, e.g., stromal cells, 40-80%"
+    )
     applies_to: List[str] = Field(
         ...,
         description="Diagnosis names this finding applies to; empty means all diagnoses in the text",
