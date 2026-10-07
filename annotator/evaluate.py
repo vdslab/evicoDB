@@ -190,9 +190,20 @@ def map_result_status(res: str) -> str:
     return "Other"
 
 
+def qualifiers_of(item) -> list:
+    """Qualifiers of a result (e.g. ["ほぼ", "条件付き:細胞"]); empty if the judgment is unqualified.
+
+    Taken from the raw result via result-mapping.csv, plus those the model output (prompt v5+).
+    """
+    if not item:
+        return []
+    qualifiers = [RESULT_QUALIFIERS.get(item["raw_result"].strip(), "")] + item.get("qualifiers", [])
+    return list(dict.fromkeys(q for q in qualifiers if q))
+
+
 def qualifier_of(item) -> str:
-    """Qualifier of a result (e.g. "ほぼ", "条件付き:細胞"), or "" if the judgment is unqualified."""
-    return RESULT_QUALIFIERS.get(item["raw_result"].strip(), "") if item else ""
+    """Qualifiers joined for display, or "" if the judgment is unqualified."""
+    return "、".join(qualifiers_of(item))
 
 
 def mapped_label(item) -> str:
@@ -269,6 +280,7 @@ def index_extracted(findings: list) -> dict:
                 "raw_result": result_raw,
                 "mapped_result": result_mapped,
                 "method": f.get("method") or "",
+                "qualifiers": f.get("qualifiers") or [],
             }
         )
     return extracted
@@ -281,10 +293,22 @@ def compare_findings(gt_findings: dict, extracted_findings: dict, input_text):
     - extracted but not in the ground truth -> "Not in GT" (not counted as FP)
     - in the ground truth but never mentioned in the input text -> "Not in text" (not counted as FN)
 
-    A mismatch where either side carries a qualifier (the judgment is not 100%) is marked
-    "Mismatch (qualified)". It still counts as FP + FN; `qualified` lets lenient metrics drop it.
+    A mismatch where either side's raw result carries a qualifier in result-mapping.csv (the judgment
+    is not 100%) is marked "Mismatch (qualified)". Qualifiers the model adds are not used here: they
+    are on most findings, so they would hide plain disagreements. It still counts as FP + FN; `qualified` lets lenient metrics drop it.
+    Of the molecules found on both sides, `gt_qualified` counts those with a qualifier in the ground
+    truth and `qualifier_match` those where the extraction shares one of its qualifiers (not scored).
     """
-    counts = {"tp": 0, "fp": 0, "fn": 0, "qualified": 0, "excluded_not_in_gt": 0, "excluded_not_in_text": 0}
+    counts = {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "qualified": 0,
+        "gt_qualified": 0,
+        "qualifier_match": 0,
+        "excluded_not_in_gt": 0,
+        "excluded_not_in_text": 0,
+    }
     rows = []
     for mol in sorted(set(gt_findings) | set(extracted_findings)):
         gt_item = gt_findings.get(mol)
@@ -298,6 +322,11 @@ def compare_findings(gt_findings: dict, extracted_findings: dict, input_text):
             )
 
         if gt_item and ex_item:
+            gt_qualifiers = qualifiers_of(gt_item)
+            if gt_qualifiers:
+                counts["gt_qualified"] += 1
+                if set(gt_qualifiers) & set(qualifiers_of(ex_item)):
+                    counts["qualifier_match"] += 1
             if results_match(gt_item["mapped_result"], ex_item["mapped_result"]):
                 status = "TP (Match)"
                 counts["tp"] += 1
@@ -305,7 +334,9 @@ def compare_findings(gt_findings: dict, extracted_findings: dict, input_text):
                 status = "Mismatch"
                 counts["fp"] += 1
                 counts["fn"] += 1
-                if qualifier_of(gt_item) or qualifier_of(ex_item):
+                if RESULT_QUALIFIERS.get(gt_item["raw_result"].strip()) or RESULT_QUALIFIERS.get(
+                    ex_item["raw_result"].strip()
+                ):
                     status = "Mismatch (qualified)"
                     counts["qualified"] += 1
         elif ex_item:
@@ -495,6 +526,9 @@ def evaluate_run(json_files, label_csv: Path):
         print(f"Lenient Micro Precision:   {len_p:.2%}   (qualified mismatches removed from FP and FN)")
         print(f"Lenient Micro Recall (抽出率): {len_r:.2%}")
         print(f"Lenient Micro F1:          {len_f1:.2%}")
+        gt_q = sum(r["gt_qualified"] for r in summary_results)
+        q_match = sum(r["qualifier_match"] for r in summary_results)
+        print(f"Qualifier agreement:       {q_match} / {gt_q}   (ground-truth qualifiers also given by the extraction)")
 
         # Per-organ breakdown (micro-averaged over each organ's findings)
         organs = {}
