@@ -165,6 +165,24 @@ def normalize_name(name: str) -> str:
     return "".join(c for c in (name or "").lower() if c.isalnum())
 
 
+def load_gt_corrections(csv_path: Path) -> dict:
+    """Load label/gt-corrections.csv: ground-truth results the pathologists corrected.
+
+    The ground truth was made from the WHO 4th edition; where the 5th edition text differs, the
+    pathologists' judgment replaces it. Returns (diagnosis, molecule key) -> (result, qualifier).
+    """
+    if not csv_path.exists():
+        return {}
+    df = pd.read_csv(csv_path, keep_default_na=False, encoding="utf-8-sig")
+    return {
+        (normalize_name(d), canonical_molecule(m)): (r, q)
+        for d, m, r, q in zip(df["diagnosis"], df["molecule"], df["result"], df["qualifier"])
+    }
+
+
+GT_CORRECTIONS = load_gt_corrections(SCRIPT_DIR / "label" / "gt-corrections.csv")
+
+
 def find_input_text(extracted_data: dict, json_path: Path):
     """Return the lowercased input text the JSON was extracted from, or None if not found."""
     name = source_file_name(extracted_data, json_path)
@@ -268,6 +286,12 @@ def index_ground_truth(gt_df: pd.DataFrame) -> dict:
         mol_key = canonical_molecule(mol_raw, method)
         result_raw = str(row["Results"]).strip()
         result_mapped = map_result_status(result_raw)
+        qualifiers = []
+        correction = GT_CORRECTIONS.get((normalize_name(row["Diagnosis"]), canonical_molecule(mol_raw)))
+        if correction:
+            result_mapped, qualifier = correction
+            qualifiers = [qualifier] if qualifier else []
+            result_raw = f"{result_raw} -> corrected: {result_mapped}"
         if not mol_key or result_mapped == "Exclude":
             continue
         if mol_key in gt_findings and not (
@@ -279,6 +303,7 @@ def index_ground_truth(gt_df: pd.DataFrame) -> dict:
             "raw_result": result_raw,
             "mapped_result": result_mapped,
             "method": method,
+            "qualifiers": qualifiers,
         }
     return gt_findings
 
@@ -314,8 +339,9 @@ def compare_findings(gt_findings: dict, extracted_findings: dict, input_text):
     - extracted but not in the ground truth -> "Not in GT" (not counted as FP)
     - in the ground truth but never mentioned in the input text -> "Not in text" (not counted as FN)
 
-    A mismatch where either side's raw result carries a qualifier in result-mapping.csv (the judgment
-    is not 100%) is marked "Mismatch (qualified)". Qualifiers the model adds are not used here: they
+    A mismatch where either side's raw result carries a qualifier in result-mapping.csv, or the
+    ground truth has one from gt-corrections.csv (the judgment is not 100%), is marked
+    "Mismatch (qualified)". Qualifiers the model adds are not used here: they
     are on most findings, so they would hide plain disagreements. It still counts as FP + FN; `qualified` lets lenient metrics drop it.
     Of the molecules found on both sides, `gt_qualified` counts those with a qualifier in the ground
     truth and `qualifier_match` those where the extraction shares one of its qualifiers (not scored).
@@ -355,7 +381,7 @@ def compare_findings(gt_findings: dict, extracted_findings: dict, input_text):
                 status = "Mismatch"
                 counts["fp"] += 1
                 counts["fn"] += 1
-                if RESULT_QUALIFIERS.get(gt_item["raw_result"].strip()) or RESULT_QUALIFIERS.get(
+                if qualifiers_of(gt_item) or RESULT_QUALIFIERS.get(
                     ex_item["raw_result"].strip()
                 ):
                     status = "Mismatch (qualified)"
