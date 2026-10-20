@@ -21,7 +21,8 @@ ALK,ALK1;ALK fusion;ALK rearrangement
 p40,ΔNp63;deltaNp63
 D2-40,podoplanin
 Factor VIII,Factor Ⅷ;factor VIII-related antigen;von Willebrand factor
-HCGβ,β-hCG;beta-hCG;hCG
+HCGβ,β-hCG;beta-hCG
+hCG,human chorionic gonadotropin
 CEA,carcinoembryonic antigen
 GFAP,glial fibrillary acidic protein
 Glypican 3,Glypican3;GPC3
@@ -34,5 +35,6 @@ HNF4a,HNF4α;HNF4A;HNF-4α
 Neuroendocrine markers,neuroendocrine marker
 Melanoma marker,melanoma markers
 S100,S-100;S100 protein
-TSC2,16p13 loss;tuberin
+TSC2,tuberin
+16p13 loss,16p13(TSC2) loss;16p13 deletion
 EBV,EBER;EBER ISH;Epstein-Barr virus;EBV-encoded RNA

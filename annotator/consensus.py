@@ -25,7 +25,7 @@ def finding_key(f: dict, all_diagnoses: set) -> tuple:
     if all_diagnoses and applies_to >= all_diagnoses:
         applies_to = frozenset()
     return (
-        canonical_molecule(f.get("molecule_name") or ""),
+        canonical_molecule(f.get("molecule_name") or "", f.get("method")),
         (f.get("method") or "").strip().lower(),
         applies_to,
     )

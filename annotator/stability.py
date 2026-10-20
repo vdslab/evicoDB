@@ -67,7 +67,7 @@ def finding_table(run_dirs: list) -> pd.DataFrame:
             data = json.loads(path.read_text(encoding="utf-8"))
             source = source_file_name(data, path)
             for f in data.get("findings", []):
-                key = (source, canonical_molecule(f.get("molecule_name") or ""))
+                key = (source, canonical_molecule(f.get("molecule_name") or "", f.get("method")))
                 if not key[1]:
                     continue
                 names.setdefault(key, f.get("molecule_name"))

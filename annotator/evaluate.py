@@ -77,25 +77,45 @@ def name_variants(name: str) -> list:
     return variants
 
 
-def canonical_molecule(name: str) -> str:
-    """Comparison key for a molecule: aliases and 'ER(Estrogen receptor)'-style names collapse to one key."""
-    variants = name_variants(name)
-    for v in variants:
+# Molecules whose staining (IHC) and gene alteration (genetic test) are different findings,
+# e.g. ALK IHC vs ALK fusion. Checked by the pathologists (2026-10-20).
+SPLIT_BY_METHOD = {"ALK", "NUT"}
+GENETIC_METHODS = {"genetic test", "fish"}
+GENETIC_WORDS = re.compile(r"\b(fusion|rearrangement|translocation)s?\b", re.IGNORECASE)
+
+
+def canonical_molecule(name: str, method: str = None) -> str:
+    """Comparison key for a molecule: aliases and 'ER(Estrogen receptor)'-style names collapse to one key.
+
+    For SPLIT_BY_METHOD molecules, a genetic finding (genetic method, or a fusion-like name when
+    the method is unknown) gets its own key, so ALK IHC and ALK fusion are not matched.
+    """
+    key = None
+    for v in name_variants(name):
         canonical = MOLECULE_ALIASES.get(normalize_molecule(v))
         if canonical:
-            return normalize_molecule(canonical)
-    # Unknown molecule: drop the parenthetical so 'Foo(Bar)' still matches 'Foo'
-    outside = re.sub(r"\(.*?\)", " ", name).strip()
-    return normalize_molecule(outside if len(normalize_molecule(outside)) >= 2 else name)
+            key = normalize_molecule(canonical)
+            break
+    if key is None:
+        # Unknown molecule: drop the parenthetical so 'Foo(Bar)' still matches 'Foo'
+        outside = re.sub(r"\(.*?\)", " ", name).strip()
+        key = normalize_molecule(outside if len(normalize_molecule(outside)) >= 2 else name)
+    if key in {normalize_molecule(m) for m in SPLIT_BY_METHOD}:
+        method = (method or "").strip().lower()
+        if method in GENETIC_METHODS or (not method and GENETIC_WORDS.search(name)):
+            key += "-gene"
+    return key
 
 
 def mentioned_in_text(name: str, text_lower: str) -> bool:
     """True if the molecule (or any of its aliases) appears in the input text."""
     names = name_variants(name)
-    for v in list(names):
+    for i, v in enumerate(list(names)):
         canonical = MOLECULE_ALIASES.get(normalize_molecule(v))
         if canonical:
-            names += MOLECULE_NAMES[canonical]
+            # A full name in the alias table ('16p13(TSC2) loss') is its own molecule: don't
+            # search for its parenthetical part ('TSC2'), which may be a different molecule
+            names = (names if i else names[:1]) + MOLECULE_NAMES[canonical]
             break
     for n in names:
         chars = normalize_molecule(n)
@@ -244,7 +264,8 @@ def index_ground_truth(gt_df: pd.DataFrame) -> dict:
     gt_findings = {}
     for _, row in gt_df.iterrows():
         mol_raw = str(row["Molecules"]).strip()
-        mol_key = canonical_molecule(mol_raw)
+        method = str(row.get("Methods", "")).strip()
+        mol_key = canonical_molecule(mol_raw, method)
         result_raw = str(row["Results"]).strip()
         result_mapped = map_result_status(result_raw)
         if not mol_key or result_mapped == "Exclude":
@@ -257,7 +278,7 @@ def index_ground_truth(gt_df: pd.DataFrame) -> dict:
             "raw_molecule": mol_raw,
             "raw_result": result_raw,
             "mapped_result": result_mapped,
-            "method": str(row.get("Methods", "")).strip(),
+            "method": method,
         }
     return gt_findings
 
@@ -269,7 +290,7 @@ def index_extracted(findings: list) -> dict:
         mol_raw = f.get("molecule_name")
         if not mol_raw:
             continue
-        mol_key = canonical_molecule(mol_raw)
+        mol_key = canonical_molecule(mol_raw, f.get("method"))
         result_raw = f.get("result_normalized") or f.get("result") or ""
         result_mapped = map_result_status(result_raw)
         if not mol_key or result_mapped == "Exclude":

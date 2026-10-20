@@ -74,14 +74,14 @@ def review_rows(json_path: Path, label_csv: Path) -> list:
         ]
         categories = {}
         for f in own:
-            categories.setdefault(canonical_molecule(f.get("molecule_name") or ""), set()).add(
+            categories.setdefault(canonical_molecule(f.get("molecule_name") or "", f.get("method")), set()).add(
                 map_result_status(f.get("result_normalized") or "")
             )
         gt = ground_truth_for(source_name, diagnosis, label_csv)
 
         for f in own:
             evidence = f.get("evidence_text") or ""
-            mol_key = canonical_molecule(f.get("molecule_name") or "")
+            mol_key = canonical_molecule(f.get("molecule_name") or "", f.get("method"))
             reasons_high, reasons_mid = [], []
             if f.get("result_normalized") in AMBIGUOUS_RESULTS:
                 reasons_high.append(f"あいまいな判定({f['result_normalized']})")
