@@ -13,10 +13,13 @@ CREATE TABLE
 -- Excelの「Organs」「Primary/Metastasis」「Origin」
 -- 「Malignancy」「Major classifications」「Diagnosis」「ICD-O」に対応
 -- 1診断に対して複数の所見（findings）が紐づく
+-- 上位分類と下位分類は parent_diagnosis_id で親子にする
+--   例: Adenocarcinoma ＞ Invasive non-mucinous adenocarcinoma ＞ Lepidic adenocarcinoma
 CREATE TABLE
     diagnoses (
         diagnosis_id INT NOT NULL AUTO_INCREMENT COMMENT '診断ID（自動採番）',
-        diagnosis VARCHAR(255) NOT NULL COMMENT '診断名（例: Invasive mucinous adenocarcinoma）',
+        diagnosis VARCHAR(255) NOT NULL COMMENT '診断名（例: Invasive mucinous adenocarcinoma）。旧名は登録しない',
+        parent_diagnosis_id INT NULL COMMENT '上位分類の診断ID（diagnoses.diagnosis_id）。最上位なら NULL',
         organs VARCHAR(100) NOT NULL COMMENT '臓器（例: Lung）',
         icd_o VARCHAR(20) NULL COMMENT 'ICD-Oコード（例: 8253/3）',
         major_classifications VARCHAR(255) NULL COMMENT '大分類（例: Adenocarcinoma）',
@@ -24,7 +27,9 @@ CREATE TABLE
         origin VARCHAR(50) NULL COMMENT '組織学的起源（例: Epithelial）',
         malignancy VARCHAR(50) NULL COMMENT '良悪性区分（Benign / Malignant など）',
         PRIMARY KEY (diagnosis_id),
-        UNIQUE KEY uq_diagnoses_organ_diagnosis (organs, diagnosis)
+        UNIQUE KEY uq_diagnoses_organ_diagnosis (organs, diagnosis),
+        KEY idx_diagnoses_parent_diagnosis_id (parent_diagnosis_id),
+        CONSTRAINT fk_diagnoses_parent FOREIGN KEY (parent_diagnosis_id) REFERENCES diagnoses (diagnosis_id) ON UPDATE CASCADE ON DELETE RESTRICT
     ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT = '診断マスタ';
 
 -- 所見テーブル
@@ -39,7 +44,11 @@ CREATE TABLE
         molecule_name VARCHAR(255) NULL COMMENT '分子・マーカー名（例: TTF-1, CK7, KRAS mutation）',
         molecule_description TEXT NULL COMMENT '分子の説明・補足情報',
         result TEXT NULL COMMENT '検査結果の記述（例: Positive, Negative, Positive, focal など）',
-        result_category ENUM('Positive', 'Negative', 'Altered', 'Equivocal') NULL COMMENT '検査結果の判定（陽性 / 陰性 / 遺伝子異常あり / 判定困難）',
+        result_category ENUM('Positive', 'Negative', 'Altered') NULL COMMENT '検査結果の判定（陽性 / 陰性 / 遺伝子異常あり）',
+        qualifiers JSON NULL COMMENT '判定の注釈（例: ["ほぼ", "条件付き:細胞"]）。100% そうとは言えないことを表す',
+        qualifier_note TEXT NULL COMMENT '注釈の中身（例: stromal cells, 40-80%）',
+        evidence_text TEXT NULL COMMENT '根拠となる本文（原文のまま）',
+        source VARCHAR(100) NULL COMMENT '所見の出どころ（例: Excel, prompt-v6.2）',
         photo TEXT NULL COMMENT '画像ファイル名またはパス',
         PRIMARY KEY (finding_id),
         KEY idx_findings_diagnosis_id (diagnosis_id),
