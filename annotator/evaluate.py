@@ -165,6 +165,11 @@ def normalize_name(name: str) -> str:
     return "".join(c for c in (name or "").lower() if c.isalnum())
 
 
+# Proliferation indices are a percentage, not positive / negative: not scored. Their values stay
+# in the extraction as qualifiers (条件付き:%) and qualifier_note.
+NOT_SCORED_MOLECULES = {"Ki-67"}
+
+
 def load_gt_corrections(csv_path: Path) -> dict:
     """Load label/gt-corrections.csv: ground-truth results the pathologists corrected.
 
@@ -181,6 +186,7 @@ def load_gt_corrections(csv_path: Path) -> dict:
 
 
 GT_CORRECTIONS = load_gt_corrections(SCRIPT_DIR / "label" / "gt-corrections.csv")
+NOT_SCORED_KEYS = {canonical_molecule(m) for m in NOT_SCORED_MOLECULES}
 
 
 def find_input_text(extracted_data: dict, json_path: Path):
@@ -292,7 +298,7 @@ def index_ground_truth(gt_df: pd.DataFrame) -> dict:
             result_mapped, qualifier = correction
             qualifiers = [qualifier] if qualifier else []
             result_raw = f"{result_raw} -> corrected: {result_mapped}"
-        if not mol_key or result_mapped == "Exclude":
+        if not mol_key or mol_key in NOT_SCORED_KEYS or result_mapped == "Exclude":
             continue
         if mol_key in gt_findings and not (
             result_mapped == "Positive" and gt_findings[mol_key]["mapped_result"] != "Positive"
@@ -318,7 +324,7 @@ def index_extracted(findings: list) -> dict:
         mol_key = canonical_molecule(mol_raw, f.get("method"))
         result_raw = f.get("result_normalized") or f.get("result") or ""
         result_mapped = map_result_status(result_raw)
-        if not mol_key or result_mapped == "Exclude":
+        if not mol_key or mol_key in NOT_SCORED_KEYS or result_mapped == "Exclude":
             continue
         extracted.setdefault(mol_key, []).append(
             {
