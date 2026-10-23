@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from evaluate import canonical_molecule, evaluate_run, prf, source_file_name
+from evaluate import canonical_molecule, evaluate_run, prf, select_split, source_file_name
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 
@@ -109,6 +109,9 @@ def main():
         help="Ground truth CSV (same as evaluate.py)",
     )
     parser.add_argument("--out-dir", default=str(SCRIPT_DIR / "output"), help="Where to save the report (default: annotator/output)")
+    parser.add_argument(
+        "--split", choices=["all", "dev", "test"], default="all", help="Score only the dev or test files (see eval-split.csv)"
+    )
     args = parser.parse_args()
 
     run_dirs = [Path(d) for d in args.run_dirs]
@@ -119,7 +122,7 @@ def main():
     metrics, statuses = [], defaultdict(dict)
     for run in run_dirs:
         with contextlib.redirect_stdout(io.StringIO()):
-            rows = evaluate_run(sorted(run.glob("*.json")), label_csv)
+            rows = evaluate_run(select_split(sorted(run.glob("*.json")), args.split), label_csv)
         metrics.append({"run": run.name, **run_metrics(rows), **run_cost(run)})
         for r in rows:
             if "excluded" not in r["Status"]:
@@ -127,7 +130,8 @@ def main():
 
     findings = finding_table(run_dirs)
     stamp = f"{datetime.now():%Y%m%d-%H%M%S}"
-    out_base = Path(args.out_dir) / f"stability_{prompt}_{stamp}"
+    split = "" if args.split == "all" else f"_{args.split}"
+    out_base = Path(args.out_dir) / f"stability_{prompt}{split}_{stamp}"
     findings.to_csv(out_base.with_suffix(".csv"), index=False, encoding="utf-8-sig")
 
     lines = [f"# Stability of {prompt} over {len(run_dirs)} runs", ""]

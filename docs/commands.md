@@ -93,9 +93,13 @@ python annotator/evaluate.py --output-dir annotator/output/20261005-033733_promp
 
 # 1ファイルだけ評価したい場合
 python annotator/evaluate.py --single-json "annotator/output/20261005-033733_prompt-v4/089_Squamous cell carcinoma.json"
+
+# 調整用（dev）／確認用（test）のファイルだけ評価（分け方は annotator/eval-split.csv）
+# プロンプトの調整は dev だけを見て行い、test は精度の報告にだけ使う
+python annotator/evaluate.py --split dev
 ```
 
-評価結果は実行フォルダに `evaluation_report.md` と `evaluation_details.csv` として保存される。
+評価結果は実行フォルダに `evaluation_report.md` と `evaluation_details.csv` として保存される（`--split` を付けたときは `evaluation_report_dev.md` のように名前の後ろに付く）。
 
 ## Annotator: 人が確認する一覧 (review.py)
 

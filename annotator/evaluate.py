@@ -189,6 +189,24 @@ GT_CORRECTIONS = load_gt_corrections(SCRIPT_DIR / "label" / "gt-corrections.csv"
 NOT_SCORED_KEYS = {canonical_molecule(m) for m in NOT_SCORED_MOLECULES}
 
 
+def load_eval_split(csv_path: Path) -> dict:
+    """Load eval-split.csv: input file -> "dev" (used to tune prompts) or "test" (only for reporting)."""
+    if not csv_path.exists():
+        return {}
+    df = pd.read_csv(csv_path, keep_default_na=False)
+    return dict(zip(df["input_file"], df["split"]))
+
+
+EVAL_SPLIT = load_eval_split(SCRIPT_DIR / "eval-split.csv")
+
+
+def select_split(json_files: list, split: str) -> list:
+    """Keep the JSONs whose input file is in the given split ("all" keeps every file)."""
+    if split == "all":
+        return list(json_files)
+    return [p for p in json_files if EVAL_SPLIT.get(f"{Path(p).stem}.txt") == split]
+
+
 def find_input_text(extracted_data: dict, json_path: Path):
     """Return the lowercased input text the JSON was extracted from, or None if not found."""
     name = source_file_name(extracted_data, json_path)
@@ -624,6 +642,12 @@ def main():
         default=None,
         help="Evaluate a single specific JSON file",
     )
+    parser.add_argument(
+        "--split",
+        choices=["all", "dev", "test"],
+        default="all",
+        help="Score only the dev files (for tuning prompts) or the test files (for reporting); see eval-split.csv",
+    )
 
     args = parser.parse_args()
 
@@ -660,7 +684,7 @@ def main():
         print(f"Error: Output directory '{out_dir}' does not exist.", file=sys.stderr)
         sys.exit(1)
 
-    json_files = sorted(list(out_dir.glob("*.json")))
+    json_files = select_split(sorted(out_dir.glob("*.json")), args.split)
     if not json_files:
         print(f"No JSON files found in {out_dir}")
         return
@@ -669,8 +693,9 @@ def main():
     print(f"Using label CSV: {label_csv}")
 
     # Save the report and per-molecule details next to the extracted JSONs
-    report_path = out_dir / "evaluation_report.md"
-    details_path = out_dir / "evaluation_details.csv"
+    suffix = "" if args.split == "all" else f"_{args.split}"
+    report_path = out_dir / f"evaluation_report{suffix}.md"
+    details_path = out_dir / f"evaluation_details{suffix}.csv"
     with open(report_path, "w", encoding="utf-8") as report:
         with contextlib.redirect_stdout(Tee(sys.stdout, report)):
             details = evaluate_run(json_files, label_csv)

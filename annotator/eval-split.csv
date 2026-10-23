@@ -1,0 +1,49 @@
+input_file,split
+037_Bronchial papillomas.txt,test
+041_Sclerosing pneumocytoma.txt,test
+044_Alveolar adenoma.txt,dev
+046_Papillary adenoma.txt,dev
+051_Mucinous cystadenoma.txt,test
+053_Mucous gland adenoma.txt,dev
+055_Atypical adenomatous hyperplasia.txt,dev
+057_Adenocarcinoma in situ.txt,dev
+060_Minimally invasive adenocarcinoma.txt,dev
+064_Invasive non-mucinous adenocarcinoma.txt,dev
+075_Invasive mucinous adenocarcinoma.txt,dev
+079_Colloid adenocarcinoma.txt,test
+081_Fetal adenocarcinoma.txt,test
+083_Enteric-type adenocarcinoma.txt,test
+085_Squamous dysplasia and carcinoma in situ.txt,dev
+089_Squamous cell carcinoma.txt,test
+094_Lymphoepithelial carcinoma.txt,test
+097_Large cell carcinoma.txt,dev
+100_Adenosquamous carcinoma.txt,test
+103_Pleomorphic carcinoma.txt,test
+106_Pulmonary blastoma.txt,dev
+109_Carcinosarcoma.txt,dev
+115_Pleomorphic adenoma.txt,test
+117_Adenoid cystic carcinoma.txt,test
+119_Epithelial-myoepithelial carcinoma.txt,dev
+121_Mucoepidermoid carcinoma.txt,test
+125_Myoepithelioma and myoepithelial carcinoma.txt,test
+130_Diffuse idiopathic pulmonary neuroendocrine cell hyperplasia.txt,test
+133_Carcinoid／neuroendocrine tumour.txt,dev
+139_Small cell lung carcinoma.txt,dev
+144_Large cell neuroendocrine carcinoma.txt,test
+150_Melanoma.txt,dev
+152_Meningioma.txt,test
+154_Pulmonary hamartoma.txt,dev
+156_Pulmonary chondroma.txt,test
+158_Diffuse pulmonary lymphangiomatosis.txt,dev
+160_Pleuropulmonary  blastoma.txt,test
+164_Pulmonary artery intimal sarcoma.txt,dev
+166_Congenital peribronchial myofibroblastic tumour.txt,dev
+168_Primary pulmonary myxoid sarcoma with EWSR1-CREB1 fusion.txt,test
+170_Lymphangioleiomyomatosis.txt,dev
+172_PEComa.txt,dev
+175_MALT lymphoma.txt,dev
+178_Diffuse large B-cell lymphoma.txt,test
+181_Lymphomatoid granulomatosis.txt,dev
+184_Intravascular large B-cell lymphoma.txt,test
+186_Pulmonary Langerhans cell histiocytosis.txt,test
+189_Erdheim-Chester disease.txt,test
