@@ -239,7 +239,7 @@ def main():
     parser.add_argument(
         "--prompt",
         type=str,
-        default=str(script_dir / "prompts" / "prompt-v6.1.txt"),
+        default=str(script_dir / "prompts" / "prompt-v6.2.txt"),
         help="Path to the prompt template text file",
     )
     parser.add_argument(

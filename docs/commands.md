@@ -58,7 +58,7 @@ Vertex AI を使える Google アカウントの認証情報を指定してか�
 export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud-adc/university.json"
 ```
 
-プロンプトの既定は最新の `prompt-v6.1.txt`（確信度・注釈つき、先生方の判断を反映、マーカーのまとまりを展開）。前の版を使うときは `--prompt` で指定する。
+プロンプトの既定は最新の `prompt-v6.2.txt`（確信度・注釈つき、先生方の判断を反映、マーカーのまとまりを展開、検査の使い方の説明は除外）。前の版を使うときは `--prompt` で指定する。
 
 ```bash
 # annotator/input/lung/*.txt（正解データがある肺の章）を抽出 → annotator/output/<日時>_<プロンプト名>/*.json
@@ -74,7 +74,7 @@ python annotator/extract.py --prompt annotator/prompts/prompt-v5.txt
 
 # 入出力ディレクトリ・プロンプトを指定
 python annotator/extract.py \
-  --prompt annotator/prompts/prompt-v6.1.txt \
+  --prompt annotator/prompts/prompt-v6.2.txt \
   --input-dir annotator/input/lung \
   --output-dir annotator/output
 ```
