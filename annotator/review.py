@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
-"""Build a review sheet (review.csv) for human checking of one extraction run.
+"""Build a review sheet for human checking of extraction runs.
 
-One row per (diagnosis, finding). Rows are sorted by review priority so that findings
-likely to be wrong come first. Priority uses only the extraction and the input text,
-so it works for chapters without ground truth too.
+Pass one run folder, or several runs of the same prompt. One row per (diagnosis, molecule,
+method) over all runs; the result and qualifiers shown are the majority over the runs that
+found it. Rows are sorted by review priority so that findings likely to be wrong come first.
+Priority uses only the extractions and the input text, so it works without ground truth too.
 
-  高: ambiguous result (equivocal / rare / positive_subset), conflicting results for the
-      same molecule within a diagnosis, or evidence_text not found in the input text
-  中: evidence_text contains hedging words (may, rarely, reported, ...)
+  高: the runs disagree (different results, or found in only some runs), the evidence reads
+      like a note on how a test is used rather than a result, the evidence is not in the
+      input text, or one run gives conflicting results for the molecule
+  中: "altered" although the evidence has no word for a gene alteration (e.g. "repression")
   低: none of the above
+
+Hedging words (may, usually, ...) are listed for reference but do not raise the priority:
+they are common in textbook text and did not single out wrong findings.
 """
 import argparse
 import re
 import sys
+from collections import Counter, defaultdict
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -30,10 +37,21 @@ from evaluate import (
 )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-AMBIGUOUS_RESULTS = {"equivocal", "rare", "positive_subset"}
 HEDGE_PATTERN = re.compile(
     r"\b(may|might|can|could|rarely|rare|occasional(?:ly)?|reported|some cases|subset"
     r"|variabl\w*|inconsistent|weak(?:ly)?|usually|often|up to)\b",
+    re.IGNORECASE,
+)
+# Notes on how a test is used ("useful to identify", "required to confirm") rather than a result
+USAGE_PATTERN = re.compile(
+    r"\b(useful|helpful|help(?:s)? (?:to )?(?:distinguish|identify|confirm|highlight)|aid(?:s)? in"
+    r"|(?:required|needed|necessary) to|to (?:distinguish|confirm|identify|exclude|highlight)"
+    r"|misleading|can be used|is performed)\b",
+    re.IGNORECASE,
+)
+GENETIC_WORDS = re.compile(
+    r"mutat|fusion|amplif|delet|rearrang|transloc|\bloss|alter|variant|inactivat|copy|gain"
+    r"|t\(\d|heterozygosity|splic|skipping|insertion|duplicat|methylat",
     re.IGNORECASE,
 )
 PRIORITY_ORDER = {"高": 0, "中": 1, "低": 2}
@@ -56,65 +74,83 @@ def ground_truth_for(source_name: str, diagnosis: dict, label_csv: Path) -> dict
     return index_ground_truth(load_ground_truth_rows(label_csv, entry["labels"]))
 
 
-def review_rows(json_path: Path, label_csv: Path) -> list:
+def run_findings(json_path: Path) -> dict:
+    """(diagnosis key, molecule key) -> (diagnosis, [findings]) for one run of one input file."""
     data = load_extracted_json(json_path)
-    source_name = source_file_name(data, json_path)
-    input_text = normalize_text(find_input_text(data, json_path) or "")
-    findings = data.get("findings", [])
-
-    rows = []
+    out = {}
     for diagnosis in data.get("diagnoses") or []:
-        name = diagnosis.get("diagnosis") or ""
-        key = normalize_name(name)
-        # Findings for this diagnosis: listed in applies_to, or common to all (empty applies_to)
-        own = [
-            f
-            for f in findings
-            if not f.get("applies_to") or key in {normalize_name(a) for a in f["applies_to"]}
-        ]
-        categories = {}
-        for f in own:
-            categories.setdefault(canonical_molecule(f.get("molecule_name") or "", f.get("method")), set()).add(
-                map_result_status(f.get("result_normalized") or "")
-            )
-        gt = ground_truth_for(source_name, diagnosis, label_csv)
+        dkey = normalize_name(diagnosis.get("diagnosis"))
+        for f in data.get("findings", []):
+            # Findings for this diagnosis: listed in applies_to, or common to all (empty applies_to)
+            if f.get("applies_to") and dkey not in {normalize_name(a) for a in f["applies_to"]}:
+                continue
+            mkey = canonical_molecule(f.get("molecule_name") or "", f.get("method"))
+            if mkey:
+                out.setdefault((dkey, mkey), (diagnosis, []))[1].append(f)
+    return out
 
-        for f in own:
-            evidence = f.get("evidence_text") or ""
-            mol_key = canonical_molecule(f.get("molecule_name") or "", f.get("method"))
-            reasons_high, reasons_mid = [], []
-            if f.get("result_normalized") in AMBIGUOUS_RESULTS:
-                reasons_high.append(f"あいまいな判定({f['result_normalized']})")
-            if len(categories[mol_key] - {"Exclude"}) > 1:
-                reasons_high.append("同じ分子で結果が矛盾")
-            if input_text and normalize_text(evidence) not in input_text:
-                reasons_high.append("根拠が本文に見つからない")
-            hedges = sorted({m.group(0).lower() for m in HEDGE_PATTERN.finditer(evidence)})
-            if hedges:
-                reasons_mid.append(f"言い切らない表現({', '.join(hedges)})")
-            priority = "高" if reasons_high else "中" if reasons_mid else "低"
 
-            gt_item = gt.get(mol_key)
-            rows.append(
-                {
-                    "優先度": priority,
-                    "理由": " / ".join(reasons_high + reasons_mid),
-                    "ファイル": source_name,
-                    "診断": name,
-                    "ICD-O": diagnosis.get("icd_o") or "",
-                    "分子": f.get("molecule_name") or "",
-                    "検査方法": f.get("method") or "",
-                    "結果": f.get("result") or "",
-                    "判定": f.get("result_normalized") or "",
-                    "確信度": f.get("confidence", ""),
-                    "注釈": "、".join(f.get("qualifiers") or []),
-                    "注釈の中身": f.get("qualifier_note") or "",
-                    "根拠の本文": evidence,
-                    "新規": "" if gt_item else "○",
-                    "正解データの結果": gt_item["raw_result"] if gt_item else "",
-                    "確認結果": "",
-                }
-            )
+def review_rows(name: str, run_dirs: list, label_csv: Path) -> list:
+    """Rows for one input file (e.g. '044_Alveolar adenoma.json') over all runs."""
+    paths = [run / name for run in run_dirs if (run / name).exists()]
+    n = len(paths)
+    data = load_extracted_json(paths[0])
+    source_name = source_file_name(data, paths[0])
+    input_text = normalize_text(find_input_text(data, paths[0]) or "")
+
+    per_run = [run_findings(p) for p in paths]
+    rows = []
+    for key in sorted({k for r in per_run for k in r}):
+        found = [r[key] for r in per_run if key in r]
+        diagnosis = found[0][0]
+        # One result per run: several findings for the key in a run are joined ("negative/positive")
+        run_results = ["/".join(sorted({f.get("result_normalized") or "" for f in fs})) for _, fs in found]
+        result, result_votes = Counter(run_results).most_common(1)[0]
+        base = next(fs[0] for (_, fs), r in zip(found, run_results) if r == result)
+        qualifier_votes = Counter(q for _, fs in found for q in {q for f in fs for q in f.get("qualifiers") or []})
+        qualifiers = [q for q, c in qualifier_votes.most_common() if c * 2 > len(found)]
+        evidence = base.get("evidence_text") or ""
+
+        reasons_high, reasons_mid = [], []
+        if len(found) < n:
+            reasons_high.append(f"{n}回中{len(found)}回だけ")
+        if len(set(run_results)) > 1:
+            reasons_high.append("判定が割れている")
+        if any(len({map_result_status(f.get("result_normalized") or "") for f in fs} - {"Exclude"}) > 1 for _, fs in found):
+            reasons_high.append("同じ分子で結果が矛盾")
+        if USAGE_PATTERN.search(evidence):
+            reasons_high.append("検査の使い方の説明かも")
+        if input_text and normalize_text(evidence) not in input_text:
+            reasons_high.append("根拠が本文に見つからない")
+        if result == "altered" and not GENETIC_WORDS.search(evidence):
+            reasons_mid.append("遺伝子異常の言葉がない")
+        priority = "高" if reasons_high else "中" if reasons_mid else "低"
+
+        gt_item = ground_truth_for(source_name, diagnosis, label_csv).get(key[1])
+        hedges = sorted({m.group(0).lower() for m in HEDGE_PATTERN.finditer(evidence)})
+        rows.append(
+            {
+                "優先度": priority,
+                "理由": " / ".join(reasons_high + reasons_mid),
+                "ファイル": source_name,
+                "診断": diagnosis.get("diagnosis") or "",
+                "ICD-O": diagnosis.get("icd_o") or "",
+                "分子": base.get("molecule_name") or "",
+                "検査方法": base.get("method") or "",
+                "判定": result,
+                "回数": f"{len(found)}/{n}",
+                "判定の内訳": ", ".join(f"{r}×{c}" for r, c in Counter(run_results).most_common()),
+                "注釈": "、".join(qualifiers),
+                "注釈の中身": base.get("qualifier_note") or "",
+                "結果": base.get("result") or "",
+                "確信度": base.get("confidence", ""),
+                "言い切らない表現": ", ".join(hedges),
+                "根拠の本文": evidence,
+                "新規": "" if gt_item else "○",
+                "正解データの結果": gt_item["raw_result"] if gt_item else "",
+                "確認結果": "",
+            }
+        )
     return rows
 
 
@@ -128,12 +164,13 @@ def latest_run_dir(base: Path) -> Path:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build review.csv for human checking of an extraction run")
+    parser = argparse.ArgumentParser(description="Build review.csv for human checking of extraction runs")
     parser.add_argument(
         "--output-dir",
-        type=str,
+        nargs="+",
         default=None,
-        help="Run folder with extracted JSON files (default: latest run folder in annotator/output)",
+        help="Run folder(s) with extracted JSON files; several runs of one prompt are merged "
+        "(default: latest run folder in annotator/output)",
     )
     parser.add_argument(
         "--label-csv",
@@ -143,22 +180,28 @@ def main():
     )
     args = parser.parse_args()
 
-    out_dir = Path(args.output_dir) if args.output_dir else latest_run_dir(SCRIPT_DIR / "output")
+    run_dirs = [Path(d) for d in args.output_dir] if args.output_dir else [latest_run_dir(SCRIPT_DIR / "output")]
     label_csv = Path(args.label_csv)
 
     rows = []
-    for json_path in sorted(out_dir.glob("*.json")):
-        rows += review_rows(json_path, label_csv)
+    for name in sorted({p.name for run in run_dirs for p in run.glob("*.json")}):
+        rows += review_rows(name, run_dirs, label_csv)
 
     df = pd.DataFrame(rows)
     df = df.sort_values(
         ["優先度", "ファイル", "診断"], key=lambda s: s.map(PRIORITY_ORDER) if s.name == "優先度" else s
     )
-    review_path = out_dir / "review.csv"
+    # One run: save next to its JSONs. Several runs: save one sheet for all of them.
+    if len(run_dirs) == 1:
+        review_path = run_dirs[0] / "review.csv"
+    else:
+        prompt = run_dirs[0].name.split("_", 1)[-1]
+        review_path = SCRIPT_DIR / "output" / f"review_{prompt}_{datetime.now():%Y%m%d-%H%M%S}.csv"
     df.to_csv(review_path, index=False, encoding="utf-8-sig")
 
-    print(f"Saved: {review_path} ({len(df)} rows)")
-    print(df["優先度"].value_counts().reindex(["高", "中", "低"]).to_string())
+    print(f"Saved: {review_path} ({len(df)} rows from {len(run_dirs)} run(s))")
+    print(df["優先度"].value_counts().reindex(["高", "中", "低"]).fillna(0).astype(int).to_string())
+    print(df[df["理由"] != ""]["理由"].str.split(" / ").explode().value_counts().to_string())
     print(f"新規（正解データにない）: {(df['新規'] == '○').sum()}")
 
 

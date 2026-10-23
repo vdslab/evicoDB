@@ -109,7 +109,18 @@ python annotator/review.py
 
 # 実行フォルダを指定する場合
 python annotator/review.py --output-dir annotator/output/20261005-033733_prompt-v4
+
+# 同じプロンプトで何回か抽出した結果をまとめる（おすすめ）
+# 判定・注釈は多数決。回によって結果が割れた所見は優先度「高」になる
+# → annotator/output/review_<プロンプト名>_<日時>.csv
+python annotator/review.py --output-dir annotator/output/20261023-*_prompt-v6.2
 ```
+
+優先度は、正解データを使わずに抽出結果と本文だけで決める。
+
+- 高: 回によって判定が割れている／一部の回にしか出ない、検査の使い方の説明に見える、根拠が本文に見つからない、同じ分子で結果が矛盾
+- 中: 「変異あり（altered）」なのに根拠に遺伝子異常の言葉がない
+- 低: それ以外（「may」「usually」などの言い切らない表現は列に表示するだけ）
 
 ## Git
 
