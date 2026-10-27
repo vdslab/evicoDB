@@ -6,7 +6,7 @@ authors = [
     { name = "Yosuke Onoue", email = "onoue@likr-lab.com" }
 ]
 dependencies = [
-    "google-cloud-aiplatform>=1.158.0",
+    "google-genai>=2.10.0",
     "python-dotenv>=1.2.2",
     "pandas>=3.0.3",
     "pydantic>=2.13.4",

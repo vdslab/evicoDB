@@ -14,15 +14,23 @@ from pydantic import BaseModel, Field
 script_dir = Path(__file__).resolve().parent
 load_dotenv(script_dir / ".env")
 
+# Retries of a whole file (e.g. invalid JSON); HTTP errors are first retried inside the SDK
 MAX_ATTEMPTS = 3
 RETRY_WAIT_SECONDS = 10
+# Per-request timeout and SDK retries with exponential backoff, so a 429 (TPM quota) never hangs a run
+DEFAULT_TIMEOUT_SECONDS = 600
+API_ATTEMPTS = 5
+RETRY_STATUS_CODES = [429, 500, 502, 503, 504]
+# Fixed generation settings so a run can be reproduced; vary --seed to get independent runs for consensus.py
+TEMPERATURE = 0.0
+DEFAULT_SEED = 1
 
 try:
-    import vertexai
-    from vertexai.generative_models import GenerativeModel, GenerationConfig
+    from google import genai
+    from google.genai import types
 except ImportError:
     print(
-        "Error: google-cloud-aiplatform is not installed. Please run pip install -r requirements.txt inside .venv first.",
+        "Error: google-genai is not installed. Please run pip install -r requirements.txt inside .venv first.",
         file=sys.stderr,
     )
     sys.exit(1)
@@ -155,11 +163,13 @@ def get_open_api_schema(model_class) -> dict:
 
 
 def run_extraction(
+    client: "genai.Client",
     prompt_path: Path,
     input_path: Path,
     output_path: Path,
     model_name: str,
     prompt_version: str,
+    seed: int,
 ):
     # Read prompt template and replace placeholder
     with open(prompt_path, "r", encoding="utf-8") as f:
@@ -170,17 +180,17 @@ def run_extraction(
 
     prompt = prompt_tmpl.replace("{{INPUT_TEXT}}", input_text)
 
-    # Initialize Vertex AI Model
     print(f"Calling Gemini model '{model_name}' on '{input_path.name}'...")
-    model = GenerativeModel(model_name)
 
     try:
-        response = model.generate_content(
-            prompt,
-            generation_config=GenerationConfig(
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(
                 response_mime_type="application/json",
                 response_schema=get_open_api_schema(ExtractionResult),
-                temperature=0.1,  # Low temperature for extraction accuracy
+                temperature=TEMPERATURE,
+                seed=seed,
             ),
         )
 
@@ -209,7 +219,11 @@ def run_extraction(
             "ocr_sources": {"source_name": input_path.name},
             "extraction_runs": {
                 "model_name": model_name,
+                # The exact model version that answered, to tell runs of a moving alias apart
+                "model_version": response.model_version,
                 "prompt_version": prompt_version,
+                "temperature": TEMPERATURE,
+                "seed": seed,
                 "status": "success",
                 "token_usage": usage,
             },
@@ -255,6 +269,18 @@ def main():
         default=str(script_dir / "output"),
         help="Base directory; each run saves JSONs into a new <timestamp>_<prompt_version> subfolder",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        help=f"Generation seed (default: {DEFAULT_SEED}); use different seeds for the runs merged by consensus.py",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help=f"Timeout in seconds for each API request (default: {DEFAULT_TIMEOUT_SECONDS})",
+    )
     args = parser.parse_args()
 
     # Check GCP project configuration
@@ -272,8 +298,20 @@ def main():
         print("Please check your .env configuration.", file=sys.stderr)
         sys.exit(1)
 
-    # Initialize Vertex AI SDK
-    vertexai.init(project=gcp_project, location=gcp_location)
+    client = genai.Client(
+        vertexai=True,
+        project=gcp_project,
+        location=gcp_location,
+        http_options=types.HttpOptions(
+            timeout=int(args.timeout * 1000),
+            retry_options=types.HttpRetryOptions(
+                attempts=API_ATTEMPTS,
+                initial_delay=10,
+                max_delay=120,
+                http_status_codes=RETRY_STATUS_CODES,
+            ),
+        ),
+    )
 
     prompt_path = Path(args.prompt)
     if not prompt_path.exists():
@@ -314,10 +352,16 @@ def main():
     failed = []
     for txt_file in txt_files:
         out_json_file = output_dir / f"{txt_file.stem}.json"
-        # Retry transient API errors (rate limits, timeouts) before giving up on a file
+        # Retry errors left after the SDK's own retries (or invalid JSON) before giving up on a file
         for attempt in range(1, MAX_ATTEMPTS + 1):
             usage = run_extraction(
-                prompt_path, txt_file, out_json_file, model_name, prompt_version
+                client,
+                prompt_path,
+                txt_file,
+                out_json_file,
+                model_name,
+                prompt_version,
+                args.seed,
             )
             if usage is not None:
                 break
