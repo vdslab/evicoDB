@@ -270,6 +270,18 @@ def main():
         help="Base directory; each run saves JSONs into a new <timestamp>_<prompt_version> subfolder",
     )
     parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="Name of the run subfolder (default: <timestamp>_<prompt_version>); "
+        "give the same value to every task of a Cloud Run job so they write into one run",
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip input files whose JSON already exists in the run folder (to continue a stopped or retried run)",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=DEFAULT_SEED,
@@ -335,11 +347,18 @@ def main():
         print(f"No .txt files found in input path: {input_path}")
         return
 
+    # On Cloud Run Jobs each task takes every <count>-th file; run locally, one task takes them all
+    task_index = int(os.environ.get("CLOUD_RUN_TASK_INDEX", 0))
+    task_count = int(os.environ.get("CLOUD_RUN_TASK_COUNT", 1))
+    if task_count > 1:
+        txt_files = txt_files[task_index::task_count]
+        print(f"Task {task_index + 1}/{task_count}")
+
     print(f"Found {len(txt_files)} text files to process.")
     prompt_version = prompt_path.stem
 
     # Separate each run into its own folder, e.g. output/20261004-195300_prompt-v2/
-    run_id = f"{datetime.now():%Y%m%d-%H%M%S}_{prompt_version}"
+    run_id = args.run_id or f"{datetime.now():%Y%m%d-%H%M%S}_{prompt_version}"
     output_dir = Path(args.output_dir) / run_id
     print(f"Output folder: {output_dir}")
 
@@ -350,8 +369,13 @@ def main():
         "total_tokens": 0,
     }
     failed = []
+    skipped = 0
     for txt_file in txt_files:
         out_json_file = output_dir / f"{txt_file.stem}.json"
+        if args.resume and out_json_file.exists():
+            print(f"Skipping {txt_file.name} (already extracted)")
+            skipped += 1
+            continue
         # Retry errors left after the SDK's own retries (or invalid JSON) before giving up on a file
         for attempt in range(1, MAX_ATTEMPTS + 1):
             usage = run_extraction(
@@ -375,7 +399,7 @@ def main():
         for k in totals:
             totals[k] += usage[k]
 
-    succeeded = len(txt_files) - len(failed)
+    succeeded = len(txt_files) - len(failed) - skipped
     print(
         f"\nTotal token usage ({succeeded} files): prompt={totals['prompt_tokens']} "
         f"output={totals['output_tokens']} thinking={totals['thinking_tokens']} total={totals['total_tokens']}"
