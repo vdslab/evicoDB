@@ -12,7 +12,7 @@ annotator/extract.py をコンテナにして Cloud Run Jobs で動かす。入�
 ```bash
 PROJECT=vdslab-students
 REGION=asia-northeast1
-BUCKET=vdslab-students-evico          # 管理者に作ってもらったバケット
+BUCKET=vdslab-students-evico          # 入力と出力を置くバケット（「最初の準備」で作る）
 REPO=evico                            # Artifact Registry のリポジトリ
 IMAGE=$REGION-docker.pkg.dev/$PROJECT/$REPO/annotator
 SA=annotator-runner@$PROJECT.iam.gserviceaccount.com
@@ -99,22 +99,76 @@ docker run --rm \
   annotator --input-dir=/mnt/data/input/lung --run-id=local-test --resume
 ```
 
-## 管理者にお願いすること
+## 最初の準備（1 回だけ）
 
-`vdslab-students` では、今は Cloud Run と Artifact Registry の API が無効で、GCS も使えない。次のように依頼する。
+`vdslab-students` では、今は Cloud Run と Artifact Registry の API が無効で、バケットもない。ジョブを作る前に次の 1〜5 をやる。コマンドは上の「変数」を設定してから実行する。
 
-> evico の抽出（Gemini）を Cloud Run Jobs で回したいので、vdslab-students で次の設定をお願いできますか。
->
-> 1. API の有効化：Cloud Run Admin API（run.googleapis.com）、Artifact Registry API（artifactregistry.googleapis.com）
-> 2. Artifact Registry に Docker リポジトリ `evico`（asia-northeast1）を作成
-> 3. GCS バケット `vdslab-students-evico`（asia-northeast1）を作成
-> 4. ジョブ用のサービスアカウント `annotator-runner` を作成し、次のロールを付与
->    - プロジェクト：Vertex AI ユーザー（roles/aiplatform.user）
->    - バケット `vdslab-students-evico`：Storage オブジェクト管理者（roles/storage.objectAdmin）
-> 5. 私のアカウント（chko23054@g.nihon-u.ac.jp）に次のロールを付与
->    - プロジェクト：Cloud Run デベロッパー（roles/run.developer）
->    - リポジトリ `evico`：Artifact Registry 書き込み（roles/artifactregistry.writer）
->    - サービスアカウント `annotator-runner`：サービスアカウント ユーザー（roles/iam.serviceAccountUser）
->    - バケット `vdslab-students-evico`：Storage オブジェクト管理者（roles/storage.objectAdmin）
->
-> 費用は、肺の章 1 回で約 1 ドル（Gemini の API 料金）です。Cloud Run と GCS の費用はごくわずかの見込みです。
+誰がやるか：
+
+| | 1〜4 | 5 | 6 |
+| --- | --- | --- | --- |
+| 自分が編集者の権限をもらった場合 | 自分 | 先生（オーナー） | 不要（編集者に含まれる） |
+| 先生に設定をお願いする場合 | 先生 | 先生 | 先生 |
+
+### 1. API を有効にする
+
+```bash
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com --project $PROJECT
+```
+
+### 2. Artifact Registry のリポジトリを作る
+
+```bash
+gcloud artifacts repositories create $REPO \
+  --project $PROJECT --location $REGION --repository-format docker
+```
+
+### 3. GCS のバケットを作る
+
+```bash
+gcloud storage buckets create gs://$BUCKET \
+  --project $PROJECT --location $REGION --uniform-bucket-level-access
+```
+
+### 4. ジョブ用のサービスアカウントを作って、バケットを読み書きできるようにする
+
+```bash
+gcloud iam service-accounts create annotator-runner --project $PROJECT
+gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
+  --member serviceAccount:$SA --role roles/storage.objectAdmin
+```
+
+### 5. サービスアカウントが Gemini を呼べるようにする（オーナーが必要）
+
+プロジェクト全体の権限設定を変えるので、編集者ではできない。先生にお願いする。
+
+```bash
+gcloud projects add-iam-policy-binding $PROJECT \
+  --member serviceAccount:$SA --role roles/aiplatform.user
+```
+
+### 6. 自分のアカウントにロールを付ける（先生に全部お願いする場合だけ）
+
+```bash
+ME=chko23054@g.nihon-u.ac.jp
+gcloud projects add-iam-policy-binding $PROJECT --member user:$ME --role roles/run.developer
+gcloud artifacts repositories add-iam-policy-binding $REPO \
+  --project $PROJECT --location $REGION --member user:$ME --role roles/artifactregistry.writer
+gcloud iam service-accounts add-iam-policy-binding $SA \
+  --project $PROJECT --member user:$ME --role roles/iam.serviceAccountUser
+gcloud storage buckets add-iam-policy-binding gs://$BUCKET --member user:$ME --role roles/storage.objectAdmin
+```
+
+### 確認
+
+```bash
+gcloud services list --enabled --project $PROJECT | grep -E "run|artifactregistry"   # 2 つ出る
+gcloud artifacts repositories describe $REPO --project $PROJECT --location $REGION
+gcloud storage ls gs://$BUCKET                                                        # エラーにならなければ OK
+gcloud projects get-iam-policy $PROJECT \
+  --flatten bindings --filter "bindings.members:$SA" --format "value(bindings.role)"   # roles/aiplatform.user が出る
+```
+
+### 費用
+
+肺の章 1 回で約 1 ドル（Gemini の API 料金）。Cloud Run と GCS の費用はごくわずか。
