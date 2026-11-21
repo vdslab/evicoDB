@@ -61,7 +61,7 @@ def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip().lower()
 
 
-def ground_truth_for(source_name: str, diagnosis: dict, label_csv: Path) -> dict:
+def ground_truth_for(source_name: str, diagnosis: dict, label_csv: Path = None) -> dict:
     """Ground-truth findings (canonical molecule -> item) of the mapped diagnosis, or {} if none."""
     entries = DIAGNOSIS_MAPPING.get(source_name, [])
     key = normalize_name(diagnosis.get("diagnosis"))
@@ -71,7 +71,7 @@ def ground_truth_for(source_name: str, diagnosis: dict, label_csv: Path) -> dict
         entry = same_code[0] if len(same_code) == 1 else None
     if entry is None or not entry["labels"]:
         return {}
-    return index_ground_truth(load_ground_truth_rows(label_csv, entry["labels"]))
+    return index_ground_truth(load_ground_truth_rows(entry, label_csv))
 
 
 def run_findings(json_path: Path) -> dict:
@@ -175,13 +175,14 @@ def main():
     parser.add_argument(
         "--label-csv",
         type=str,
-        default=str(SCRIPT_DIR / "label" / "example-label-clean.csv"),
-        help="Ground truth CSV, used only to show the existing result next to each finding",
+        default=None,
+        help="Ground truth CSV, used only to show the existing result next to each finding "
+        "(default: each diagnosis's label_file in label/diagnosis-mapping.csv)",
     )
     args = parser.parse_args()
 
     run_dirs = [Path(d) for d in args.output_dir] if args.output_dir else [latest_run_dir(SCRIPT_DIR / "output")]
-    label_csv = Path(args.label_csv)
+    label_csv = Path(args.label_csv) if args.label_csv else None
 
     rows = []
     for name in sorted({p.name for run in run_dirs for p in run.glob("*.json")}):

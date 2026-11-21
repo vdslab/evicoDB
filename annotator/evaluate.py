@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import contextlib
+import functools
 import json
 import re
 import sys
@@ -137,8 +138,9 @@ def load_diagnosis_mapping(csv_path: Path) -> dict:
     """Load label/diagnosis-mapping.csv.
 
     One row per diagnosis listed in an input text's ICD-O coding section (WHO 5th ed.),
-    with the ground-truth Diagnosis names it corresponds to. Returns
-    input file name -> [{"icd_o", "who_diagnosis", "labels"}, ...].
+    with the ground-truth Diagnosis names it corresponds to, and where those names are:
+    the ground-truth file in label/ (`label_file`) and its Organs value (`organ`). Returns
+    input file name -> [{"icd_o", "who_diagnosis", "labels", "organ", "label_file"}, ...].
     """
     if not csv_path.exists():
         return {}
@@ -152,6 +154,8 @@ def load_diagnosis_mapping(csv_path: Path) -> dict:
                     "icd_o": r["icd_o"],
                     "who_diagnosis": r["who_diagnosis"],
                     "labels": [d.strip() for d in r["label_diagnoses"].split(" ; ") if d.strip()],
+                    "organ": r["organ"],
+                    "label_file": r["label_file"],
                 }
             )
     return mapping
@@ -242,14 +246,23 @@ def map_result_status(res: str) -> str:
     if not res:
         return "Exclude"
 
-    # Fallback for values not in the table: judge by the leading word, since
-    # qualifiers like "Positive, ..., negative for stromal cells" may follow it
+    # Fallback for values not in the table (e.g. the free-text results of digestive-label.csv):
+    # judge by the leading words, since qualifiers like "Positive, ..., negative for stromal cells"
+    # or "Mutated (activating)" may follow them
     res_lower = res.lower()
-    if res_lower.startswith("positive"):
-        return "Positive"
-    if res_lower.startswith("negative"):
-        return "Negative"
+    for category, pattern in LEADING_WORDS:
+        if pattern.match(res_lower):
+            return category
     return "Other"
+
+
+LEADING_WORDS = [
+    ("Altered", re.compile(r"(inherited |activating |gene )?(mutat|amplif|delet|fusion|rearrang|transloc)"
+                           r"|loss of heterozygosity|promoter (hyper)?methylation")),
+    ("Positive", re.compile(r"positive|focal(ly)? positive|overexpress|highly expressed")),
+    ("Negative", re.compile(r"negative|wild-?type|no alterations?\b|never reported mutated"
+                            r"|loss of (nuclear )?(expression|immunostaining)")),
+]
 
 
 def qualifiers_of(item) -> list:
@@ -294,15 +307,28 @@ def load_extracted_json(json_path: Path):
     return data
 
 
-def load_ground_truth_rows(csv_path: Path, diagnoses: list):
-    """Ground-truth rows of the given Lung diagnoses (names as in diagnosis-mapping.csv)."""
-    df = pd.read_csv(csv_path, keep_default_na=False)
-    df = df[(df["Organs"].str.strip() == "Lung") & (df["Diagnosis"].str.strip().isin(diagnoses))]
+@functools.lru_cache(maxsize=None)
+def read_label_csv(csv_path: Path) -> pd.DataFrame:
+    return pd.read_csv(csv_path, keep_default_na=False)
+
+
+def load_ground_truth_rows(entry: dict, label_csv: Path = None):
+    """Ground-truth rows of one diagnosis-mapping.csv entry.
+
+    Rows come from the entry's label file and organ (e.g. Lung in example-label-clean.csv,
+    Stomach in digestive-label.csv): the same Diagnosis name can be in several organs and files.
+    `label_csv` replaces the entry's label file (the organ still applies).
+    """
+    df = read_label_csv(Path(label_csv) if label_csv else SCRIPT_DIR / "label" / entry["label_file"])
+    df = df[(df["Organs"].str.strip() == entry["organ"]) & (df["Diagnosis"].str.strip().isin(entry["labels"]))]
     return df[df["Molecules"].astype(str).str.strip() != ""]
 
 
 def index_ground_truth(gt_df: pd.DataFrame) -> dict:
-    """Canonical molecule -> ground-truth item. If a molecule appears in several rows, prefer a Positive one."""
+    """Canonical molecule -> ground-truth item. If a molecule appears in several rows, prefer a Positive one.
+
+    Results that map to no judgment ("Other", e.g. "Low proliferation index, average 2%") are not scored.
+    """
     gt_findings = {}
     for _, row in gt_df.iterrows():
         mol_raw = str(row["Molecules"]).strip()
@@ -316,7 +342,7 @@ def index_ground_truth(gt_df: pd.DataFrame) -> dict:
             result_mapped, qualifier = correction
             qualifiers = [qualifier] if qualifier else []
             result_raw = f"{result_raw} -> corrected: {result_mapped}"
-        if not mol_key or mol_key in NOT_SCORED_KEYS or result_mapped == "Exclude":
+        if not mol_key or mol_key in NOT_SCORED_KEYS or result_mapped in ("Exclude", "Other"):
             continue
         if mol_key in gt_findings and not (
             result_mapped == "Positive" and gt_findings[mol_key]["mapped_result"] != "Positive"
@@ -443,7 +469,7 @@ def prf(tp: int, fp: int, fn: int):
     return precision, recall, f1
 
 
-def evaluation_units(extracted_data: dict, json_path: Path, csv_path: Path):
+def evaluation_units(extracted_data: dict, json_path: Path, label_csv: Path = None):
     """Split one extraction into scoring units: (label, ground-truth rows, extracted findings).
 
     A file in diagnosis-mapping.csv is scored per diagnosis of its ICD-O coding section.
@@ -477,16 +503,16 @@ def evaluation_units(extracted_data: dict, json_path: Path, csv_path: Path):
             if not f.get("applies_to")
             or (key and key in {normalize_name(a) for a in f["applies_to"]})
         ]
-        units.append((e["who_diagnosis"], load_ground_truth_rows(csv_path, e["labels"]), unit_findings))
+        units.append((e["who_diagnosis"], load_ground_truth_rows(e, label_csv), unit_findings))
     return units
 
 
-def evaluate_extraction(json_path: Path, csv_path: Path):
+def evaluate_extraction(json_path: Path, label_csv: Path = None):
     """Evaluate one extracted JSON. Returns a list of per-unit metrics, or None if there is no ground truth."""
-    print(f"\nEvaluating extraction: {json_path.name} against labels in {csv_path.name}")
+    print(f"\nEvaluating extraction: {json_path.name}")
     extracted_data = load_extracted_json(json_path)
 
-    units = evaluation_units(extracted_data, json_path, csv_path)
+    units = evaluation_units(extracted_data, json_path, label_csv)
     if units is None:
         print(f"--- SKIPPED: '{json_path.name}' (no ground truth for this input) ---")
         return None
@@ -545,7 +571,7 @@ def evaluate_extraction(json_path: Path, csv_path: Path):
     return results
 
 
-def evaluate_run(json_files, label_csv: Path):
+def evaluate_run(json_files, label_csv: Path = None):
     """Evaluate every JSON of one run and print the summary. Returns per-molecule comparison rows."""
     summary_results = []
     evaluated = 0
@@ -633,8 +659,9 @@ def main():
     parser.add_argument(
         "--label-csv",
         type=str,
-        default="annotator/label/example-label-clean.csv",
-        help="Ground truth CSV for all diagnoses (rows are picked via label/diagnosis-mapping.csv)",
+        default=None,
+        help="Ground truth CSV to use for every diagnosis (default: each diagnosis's label_file in "
+        "label/diagnosis-mapping.csv, e.g. example-label-clean.csv for Lung, digestive-label.csv for the digestive organs)",
     )
     parser.add_argument(
         "--single-json",
@@ -651,8 +678,8 @@ def main():
 
     args = parser.parse_args()
 
-    label_csv = Path(args.label_csv)
-    if not label_csv.exists():
+    label_csv = Path(args.label_csv) if args.label_csv else None
+    if label_csv and not label_csv.exists():
         print(f"Error: Label file '{label_csv}' does not exist.", file=sys.stderr)
         sys.exit(1)
 
@@ -690,7 +717,7 @@ def main():
         return
 
     print(f"Found {len(json_files)} extracted JSON files for evaluation.")
-    print(f"Using label CSV: {label_csv}")
+    print(f"Using label CSV: {label_csv or 'per diagnosis (label/diagnosis-mapping.csv)'}")
 
     # Save the report and per-molecule details next to the extracted JSONs
     suffix = "" if args.split == "all" else f"_{args.split}"

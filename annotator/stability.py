@@ -105,8 +105,8 @@ def main():
     parser.add_argument("run_dirs", nargs="+", help="Run folders of the same prompt (annotator/output/<timestamp>_<prompt>)")
     parser.add_argument(
         "--label-csv",
-        default=str(SCRIPT_DIR / "label" / "example-label-clean.csv"),
-        help="Ground truth CSV (same as evaluate.py)",
+        default=None,
+        help="Ground truth CSV (same as evaluate.py; default: each diagnosis's label_file in label/diagnosis-mapping.csv)",
     )
     parser.add_argument("--out-dir", default=str(SCRIPT_DIR / "output"), help="Where to save the report (default: annotator/output)")
     parser.add_argument(
@@ -116,7 +116,7 @@ def main():
 
     run_dirs = [Path(d) for d in args.run_dirs]
     prompt = run_dirs[0].name.split("_", 1)[-1]
-    label_csv = Path(args.label_csv)
+    label_csv = Path(args.label_csv) if args.label_csv else None
 
     # Score every run with evaluate.py, without its console report
     metrics, statuses = [], defaultdict(dict)
