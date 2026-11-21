@@ -23,7 +23,7 @@ JOB=annotator-extract
 
 ```bash
 # 1 項目 1 ファイルのテキスト。章ごとにフォルダを分ける（例：input/lung/）
-# input/lung/ はシンボリックリンクなので --no-ignore-symlinks で実体をアップロードする（既定ではリンクは飛ばされる）
+# input/lung/ などの章のフォルダはシンボリックリンクなので --no-ignore-symlinks で実体をアップロードする（既定ではリンクは飛ばされる）
 gcloud storage rsync -r --no-ignore-symlinks annotator/input gs://$BUCKET/input
 ```
 
@@ -87,13 +87,10 @@ python annotator/evaluate.py --output-dir annotator/output/<consensus.py が作�
 
 ## ローカルの docker で動かす（確認用）
 
-`annotator/input/lung/` の中身は `annotator/input/` を指す絶対パスのシンボリックリンクなので、リンク先も同じパスでマウントする（GCS へは `--no-ignore-symlinks` を付けて実体をアップロードする）。
-
 ```bash
 docker build -t annotator annotator
 docker run --rm \
   -v "$PWD/annotator/input:/mnt/data/input:ro" \
-  -v "$PWD/annotator/input:$PWD/annotator/input:ro" \
   -v "$PWD/annotator/output:/mnt/data/output" \
   -v "$HOME/.config/gcloud-adc/university.json:/adc.json:ro" \
   -e GOOGLE_APPLICATION_CREDENTIALS=/adc.json \

@@ -24,12 +24,13 @@ Definition / ICD-O coding / Related terminology / Subtype(s) / Localization / ..
 
 ### 章ごとの内訳
 
-| ページ | 章 | ファイル数 | 正解データ |
-|---|---|---|---|
-| 029–189 | 肺 | 54 | あり（48件が対応） |
-| 194–224 | 胸膜（中皮腫など） | 9 | なし |
-| 228–269 | 心臓 | 20 | なし |
-| 274–448 | 縦隔（胸腺腫・胚細胞腫瘍・リンパ腫など） | 68 | なし |
+| ページ | 章 | フォルダ | ファイル数 | 正解データ |
+|---|---|---|---|---|
+| 029–189 | 肺 | `lung/` | 54 | あり（48件が対応） |
+| 194–224 | 胸膜・心膜（中皮腫など） | `pleura/` | 9 | なし |
+| 228–269 | 心臓 | `heart/` | 20 | なし |
+| 274–316 | 胸部の間葉系腫瘍（肺・胸膜・縦隔にまたがる軟部腫瘍） | `mesenchymal/` | 21 | なし |
+| 320–448 | 縦隔（胸腺腫・胸腺癌・胚細胞腫瘍・リンパ腫など） | `mediastinum/` | 47 | なし |
 
 ### 抽出・評価の対象外とするファイル
 
@@ -39,15 +40,19 @@ Definition / ICD-O coding / Related terminology / Subtype(s) / Localization / ..
 | `029_Small diagnostic samples` | 生検検体の扱いに関する章 |
 | `References.txt` | 文献リスト（約714KB、input 全体の約4割）。抽出にかけるとトークンを浪費する |
 | `example.txt` | `075_Invasive mucinous adenocarcinoma` のテスト用コピー |
-| `lung/` | 肺の54ファイルのコピー（下記参照） |
+| `lung/` などの章のフォルダ | input 直下のファイルへのリンク（下記参照） |
 
-### lung/ フォルダ
+### 章のフォルダ
 
-肺の章（029–189）の54ファイルだけを集めたフォルダです。正解データがあるのは肺だけなので、評価用の抽出はこちらを指定します。
+章ごとのファイルを集めたフォルダです。中身は input 直下のファイルへのシンボリックリンクで、章の総論（Introduction）も含めてページ範囲のファイルをすべて入れています。抽出は章のフォルダを指定します。正解データがあるのは肺だけなので、評価用の抽出は `lung/` を指定します。
 
 ```bash
 python annotator/extract.py --input-dir annotator/input/lung
+python annotator/extract.py --input-dir annotator/input/mediastinum
 ```
+
+- リンクは相対パス（`../<ファイル名>`）なので、docker では `input/` をマウントするだけでたどれます。GCS にアップロードするときは `--no-ignore-symlinks` が必要です（docs/cloud-run.md 参照）
+- `282_Desmoid fibromatosis.txt` は元のファイルが EUC-JP（β-catenin の β の 1 文字だけ）だったので、UTF-8 に変換しています。元のテキストから input を作り直すときは、同じように変換してください
 
 ## label/: 正解データ
 
