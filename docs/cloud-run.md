@@ -12,7 +12,7 @@ annotator/extract.py をコンテナにして Cloud Run Jobs で動かす。入�
 ```bash
 PROJECT=vdslab-students
 REGION=asia-northeast1
-BUCKET=vdslab-students-evico          # 入力と出力を置くバケット（「最初の準備」で作る）
+BUCKET=vdslab-evico                   # 入力と出力を置くバケット（プロジェクト vdslab-207906 にある）
 REPO=evico                            # Artifact Registry のリポジトリ
 IMAGE=$REGION-docker.pkg.dev/$PROJECT/$REPO/annotator
 SA=annotator-runner@$PROJECT.iam.gserviceaccount.com
@@ -58,6 +58,8 @@ gcloud run jobs deploy $JOB \
 
 ジョブを作ったあとは、実行するたびに引数（`--args`）で run の名前・入力・seed を指定する。
 
+初めて動かすとき・ジョブを作り直したときは、いきなり全章・3 本を回さずに、まず肺の章を seed 1 の 1 本だけ回す。GCS のマウント、Gemini の呼び出し、ログの閲覧、結果の取得（下の「結果を手元に落として評価する」）まで通ることを確かめてから、本番の実行に進む。
+
 ```bash
 RUNS=()
 for SEED in 1 2 3; do
@@ -99,76 +101,34 @@ docker run --rm \
   annotator --input-dir=/mnt/data/input/lung --run-id=local-test --resume
 ```
 
-## 最初の準備（1 回だけ）
+## 準備済みの環境（2026-11-21 に管理者が構築）
 
-`vdslab-students` では、今は Cloud Run と Artifact Registry の API が無効で、バケットもない。ジョブを作る前に次の 1〜5 をやる。コマンドは上の「変数」を設定してから実行する。
+API の有効化、リポジトリ・バケット・サービスアカウントの作成、権限の付与は、すべて管理者（先生）が済ませている。自分で準備する作業はない。
 
-誰がやるか：
+権限は、プロジェクトの編集者（`roles/editor`）ではなく、Cloud Run Jobs の実行に必要な分だけを付けている。そのため、コンソールでバケットの作成画面や一部の設定画面を開くと権限不足と出ることがあるが、このページの CLI の操作・ジョブの実行・ログの閲覧には影響しない。
 
-| | 1〜4 | 5 | 6 |
-| --- | --- | --- | --- |
-| 自分が編集者の権限をもらった場合 | 自分 | 先生（オーナー） | 不要（編集者に含まれる） |
-| 先生に設定をお願いする場合 | 先生 | 先生 | 先生 |
+| もの | 場所 | 権限 |
+| --- | --- | --- |
+| API | `vdslab-students` | `run.googleapis.com`、`artifactregistry.googleapis.com` を有効化済み |
+| 自分のアカウント（`chko23054@g.nihon-u.ac.jp`） | `vdslab-students` | カスタムロール `CloudRunBatchDeveloper`（ジョブの作成・更新・実行（`--args` の上書きを含む）・キャンセル・削除、ログの閲覧）、`VertexAI`（Gemini の呼び出し。前から付いているもの） |
+| Artifact Registry のリポジトリ `evico` | `vdslab-students`（`asia-northeast1`） | 自分に `roles/artifactregistry.writer` |
+| サービスアカウント `annotator-runner` | `vdslab-students` | SA に `roles/aiplatform.user`。自分に、この SA の `roles/iam.serviceAccountUser` |
+| GCS バケット `vdslab-evico` | **`vdslab-207906`**（`asia-northeast1`、uniform bucket-level access・パブリックアクセス防止あり） | 自分と SA に `roles/storage.objectUser` |
 
-### 1. API を有効にする
+- バケットは `vdslab-students` ではなく `vdslab-207906` にある。`vdslab-students` のコンソールのバケット一覧には出ないが、`gcloud storage` でもジョブのマウント（`--add-volume … bucket=vdslab-evico`）でも、プロジェクトをまたいでそのまま読み書きできる
+- 権限不足のエラーが出たら、実行したコマンドとエラーメッセージを先生に伝える
 
-```bash
-gcloud services enable run.googleapis.com artifactregistry.googleapis.com --project $PROJECT
-```
+### 疎通確認
 
-### 2. Artifact Registry のリポジトリを作る
-
-```bash
-gcloud artifacts repositories create $REPO \
-  --project $PROJECT --location $REGION --repository-format docker
-```
-
-### 3. GCS のバケットを作る
+大学のアカウントでログインした状態で、次がエラーにならないことを確かめる。
 
 ```bash
-gcloud storage buckets create gs://$BUCKET \
-  --project $PROJECT --location $REGION --uniform-bucket-level-access
-```
-
-### 4. ジョブ用のサービスアカウントを作って、バケットを読み書きできるようにする
-
-```bash
-gcloud iam service-accounts create annotator-runner --project $PROJECT
-gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
-  --member serviceAccount:$SA --role roles/storage.objectAdmin
-```
-
-### 5. サービスアカウントが Gemini を呼べるようにする（オーナーが必要）
-
-プロジェクト全体の権限設定を変えるので、編集者ではできない。先生にお願いする。
-
-```bash
-gcloud projects add-iam-policy-binding $PROJECT \
-  --member serviceAccount:$SA --role roles/aiplatform.user
-```
-
-### 6. 自分のアカウントにロールを付ける（先生に全部お願いする場合だけ）
-
-```bash
-ME=chko23054@g.nihon-u.ac.jp
-gcloud projects add-iam-policy-binding $PROJECT --member user:$ME --role roles/run.developer
-gcloud artifacts repositories add-iam-policy-binding $REPO \
-  --project $PROJECT --location $REGION --member user:$ME --role roles/artifactregistry.writer
-gcloud iam service-accounts add-iam-policy-binding $SA \
-  --project $PROJECT --member user:$ME --role roles/iam.serviceAccountUser
-gcloud storage buckets add-iam-policy-binding gs://$BUCKET --member user:$ME --role roles/storage.objectAdmin
-```
-
-### 確認
-
-```bash
-gcloud services list --enabled --project $PROJECT | grep -E "run|artifactregistry"   # 2 つ出る
+gcloud auth list                                                                       # 大学のアカウントに * が付いている
+gcloud storage ls gs://$BUCKET
 gcloud artifacts repositories describe $REPO --project $PROJECT --location $REGION
-gcloud storage ls gs://$BUCKET                                                        # エラーにならなければ OK
-gcloud projects get-iam-policy $PROJECT \
-  --flatten bindings --filter "bindings.members:$SA" --format "value(bindings.role)"   # roles/aiplatform.user が出る
+gcloud run jobs list --project $PROJECT --region $REGION
 ```
 
 ### 費用
 
-肺の章 1 回で約 1 ドル（Gemini の API 料金）。Cloud Run と GCS の費用はごくわずか。
+肺の章 1 回で約 2.3 ドル（2.0〜2.7 ドル、ほぼ Gemini の API 料金）、胸部の全章で 1 回約 5.5 ドル。Cloud Run と GCS の費用はごくわずか。根拠と章ごとの見積もりは README.md の「料金の目安」。
